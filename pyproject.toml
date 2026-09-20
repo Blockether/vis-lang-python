@@ -1,6 +1,6 @@
 [project]
 name = "vis-lang-python"
-version = "1.0.0"
+version = "1.0.1"
 description = "Python tools for Vis: ruff formatting and lint, pytest runs and a managed project REPL."
 requires-python = ">=3.11"
 dependencies = [

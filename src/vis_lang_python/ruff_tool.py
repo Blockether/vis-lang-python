@@ -44,6 +44,9 @@ def ruff_path(root):
 def format_files(paths, root, *, is_written=False):
     """Report, and optionally apply, ruff's formatting.
 
+    Each file is compared with the text ruff formats it into, so the answer does
+    not depend on how ruff words its own report.
+
     Args:
         paths: Files to format.
         root: Project directory ruff runs in, so it reads the project's config.
@@ -57,37 +60,47 @@ def format_files(paths, root, *, is_written=False):
         RuntimeError: ruff failed for a reason other than unformatted files.
     """
     names = [str(path) for path in paths]
-    ruff = ruff_path(root)
-    done = process.run([ruff, "format", "--check", "--quiet", *names], cwd=root)
+    done = process.run(
+        [ruff_path(root), "format", "--check", "--quiet", *names], cwd=root
+    )
     if done.exit_code not in (0, 1):
         raise RuntimeError(f"ruff format failed: {(done.err or done.out).strip()}")
-    changed = tuple(
-        line.split("Would reformat:", 1)[1].strip()
-        for line in done.out.splitlines()
-        if line.startswith("Would reformat:")
-    )
-    if changed and is_written:
-        written = process.run([ruff, "format", "--quiet", *names], cwd=root)
-        if written.exit_code != 0:
-            raise RuntimeError(
-                f"ruff format failed: {(written.err or written.out).strip()}"
-            )
-    unchanged = tuple(name for name in names if name not in changed)
+    if done.exit_code == 0:
+        return FormatResult("python", (), tuple(names))
+    changed, unchanged = [], []
+    for name in names:
+        before = Path(name).read_text(encoding="utf-8")
+        after = format_source(before, root, name).source
+        if after == before:
+            unchanged.append(name)
+            continue
+        changed.append(name)
+        if is_written:
+            Path(name).write_text(after, encoding="utf-8")
     return FormatResult(
-        "python", changed, unchanged, is_written=is_written and bool(changed)
+        "python",
+        tuple(changed),
+        tuple(unchanged),
+        is_written=is_written and bool(changed),
     )
 
 
-def format_source(source, root):
+def format_source(source, root, name=""):
     """`source` as ruff would format it.
+
+    Args:
+        source: Text to format.
+        root: Project directory ruff runs in.
+        name: File the text comes from, so ruff reads that file's settings.
 
     Raises:
         ToolMissing: ruff is not installed.
         ValueError: The source does not parse.
     """
-    done = process.run(
-        [ruff_path(root), "format", "--quiet", "-"], cwd=root, stdin=source
-    )
+    command = [ruff_path(root), "format", "--quiet"]
+    if name:
+        command += ["--stdin-filename", name]
+    done = process.run([*command, "-"], cwd=root, stdin=source)
     if done.exit_code != 0:
         raise ValueError(f"ruff could not format the source: {done.err.strip()}")
     return FormatResult("python", (), (), source=done.out)
