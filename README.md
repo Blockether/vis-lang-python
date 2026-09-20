@@ -1,13 +1,41 @@
 # vis-lang-python
 
-The Python language pack for [Vis](https://github.com/Blockether/vis). It registers with
-[vis-lang-interface](https://github.com/Blockether/vis-lang-interface) and serves Python:
+Python tools for [Vis](https://github.com/Blockether/vis): ruff formatting and lint, pytest runs
+and a REPL that keeps its globals between calls.
 
-- syntax verdicts from the interpreter's own compiler, for the write gate,
-- `format_code` and `lint_code` through ruff,
-- `run_tests` for pytest, unittest and a project's own runner,
-- the managed project REPL behind `repl_start` / `repl_eval` / `repl_stop`.
+Vis knows nothing about Python. This extension does, and it runs the tools your project already
+uses — its ruff, its pytest, its interpreter — so what you see here matches what your CI sees.
 
-## Status
+## Install
 
-Early: extraction from the Vis engine is in progress. Until the first release, pin by commit.
+```bash
+vis-agent extension install Blockether/vis-lang-python --global --trust
+```
+
+## Tools
+
+```python
+py.format_code(["src"], is_written=True)     # ruff format
+py.lint_code(["src"])                        # ruff check, with rule codes
+py.run_tests(["tests"], keyword="repl")      # pytest, counted from its JUnit report
+py.repl_start(cwd="~/app")                   # the project's own interpreter
+py.repl_eval("model = load()", cwd="~/app")  # globals live between calls
+py.repl_stop(cwd="~/app")
+```
+
+Which interpreter runs your tests and REPL is decided per project, first match winning: uv
+(`uv.lock` or `[tool.uv]`), Poetry (`poetry.lock`), a local `.venv`, then `python3`. Ruff is taken
+from the project's virtualenv, then `PATH`, then the copy installed with this extension.
+
+## Requirements
+
+`pytest` in the project you test. Everything else is installed with the extension.
+
+## Development
+
+```bash
+vis-agent python -m pytest tests -q
+```
+
+Results follow the contract in
+[vis-lang-interface](https://github.com/Blockether/vis-lang-interface).

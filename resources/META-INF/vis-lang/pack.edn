@@ -1,3 +1,0 @@
-{:pack "python"
- :register com.blockether.vis.lang.python.core/register!
- :python ["language_surface_python.py"]}

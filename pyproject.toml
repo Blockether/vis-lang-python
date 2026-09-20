@@ -1,0 +1,19 @@
+[project]
+name = "vis-lang-python"
+version = "1.0.0"
+description = "Python tools for Vis: ruff formatting and lint, pytest runs and a managed project REPL."
+requires-python = ">=3.11"
+dependencies = [
+  "vis-agent>=0.2.10",
+  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v1.0.0",
+  "ruff>=0.14",
+]
+
+[tool.vis]
+category = "tools"
+source_paths = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+# TestResult from the contract is data, not a test case: collect functions only.
+python_classes = []

@@ -1,3 +1,0 @@
-;; Namespaces the native image must retain for this pack: its registrar, which the
-;; engine resolves from `META-INF/vis-lang/pack.edn` only at run time.
-[com.blockether.vis.lang.python.core]

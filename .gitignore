@@ -1,6 +1,5 @@
-.cpcache/
-target/
-.clj-kondo/.cache/
-.lsp/
-*.log
+.venv/
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+*.log
