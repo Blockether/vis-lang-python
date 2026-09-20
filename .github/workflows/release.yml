@@ -40,6 +40,14 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match pyproject version $declared." >&2
             exit 1
           fi
+      - name: Check that the extension declares the same version
+        run: |
+          set -euo pipefail
+          declared=$(python3 -c "import re,pathlib;print(re.search(r'version=\"([^\"]+)\"', pathlib.Path('extension.py').read_text()).group(1))")
+          if [ "v$declared" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the extension version $declared." >&2
+            exit 1
+          fi
       # The extension center publishes this release automatically: Blockether/vis runs
       # "Publish reviewed extension" daily for first-party extensions, and that workflow
       # can also be dispatched by hand for an immediate publication.
