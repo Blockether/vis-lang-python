@@ -9,7 +9,7 @@ uses — its ruff, its pytest, its interpreter — so what you see here matches 
 ## Install
 
 ```bash
-vis-agent extension install Blockether/vis-lang-python --global --trust
+vis-agent extension install 'blockether/vis-lang-python' --global --trust
 ```
 
 ## Tools
