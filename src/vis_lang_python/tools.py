@@ -37,6 +37,17 @@ def _root(cwd, paths=()):
     return str(project_root(start, MARKERS))
 
 
+def _in_root(root, paths):
+    """`paths` as the caller means them: a relative name belongs to `root`.
+
+    ruff runs in `root`, so it already reads relative names that way; the files
+    are also read and rewritten here, where the process directory is Vis' own.
+    """
+    return tuple(
+        str(one) if Path(one).is_absolute() else str(Path(root) / one) for one in paths
+    )
+
+
 def _session(language, answer):
     """A `repl` answer as a `ReplSession`."""
     return ReplSession(
@@ -70,7 +81,7 @@ class PythonTools:
         root = _root(cwd, tuple(paths))
         if source:
             return ruff_tool.format_source(source, root)
-        files = source_files(paths, ruff_tool.SUFFIXES)
+        files = source_files(_in_root(root, paths), ruff_tool.SUFFIXES)
         if not files:
             raise ValueError("no Python file in the given paths")
         return ruff_tool.format_files(files, root, is_written=is_written)
@@ -89,7 +100,7 @@ class PythonTools:
         ToolMissing when no ruff is installed.
         """
         root = _root(cwd, tuple(paths))
-        files = source_files(paths, ruff_tool.SUFFIXES)
+        files = source_files(_in_root(root, paths), ruff_tool.SUFFIXES)
         if not files:
             raise ValueError("no Python file in the given paths")
         return ruff_tool.check_files(files, root, is_fixed=is_fixed)
