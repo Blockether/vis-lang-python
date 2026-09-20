@@ -7,21 +7,21 @@ JSON request per line in, one JSON answer per line out, with globals that live
 between evaluations, which is what makes it a REPL rather than a series of
 scripts.
 
-One process per project directory, owned by this extension: closing its stdin is
-what ends it, so an extension that goes away never leaves an interpreter behind.
+One runtime per project directory, owned by this extension and confined by the
+workspace jail like everything else a language tool starts: closing the channel
+it reads is what ends it, so an extension that goes away never leaves an
+interpreter behind.
 """
 
 from __future__ import annotations
 
-import collections
-import json
 import os
-import queue
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
+
+from vis_lang_interface import RuntimeGone, runtime
 
 DRIVER = r"""import sys, json, io, ast, contextlib, traceback
 
@@ -220,17 +220,14 @@ def detect_command(cwd: str) -> list[str]:
     return ["python3" if shutil.which("python3") else "python"]
 
 
-def _child_environment(values) -> dict[str, str]:
-    """This worker's environment — already the project's, `.env` and
-    `environment:` declarations included — with one call's delta applied. A
-    name mapped to None is UNSET for the child."""
-    environment = dict(os.environ)
+def _child_environment(values) -> dict:
+    """One call's environment DELTA over what the runtime inherits — this
+    worker's own environment, the project's `.env` and `environment:`
+    declarations included. A name mapped to None is UNSET for the runtime."""
+    delta = {}
     for name, value in (values or {}).items():
-        if value is None:
-            environment.pop(str(name), None)
-        else:
-            environment[str(name)] = str(value)
-    return environment
+        delta[str(name)] = None if value is None else str(value)
+    return delta
 
 
 class ReplError(RuntimeError):
@@ -238,113 +235,59 @@ class ReplError(RuntimeError):
 
 
 class _Repl:
-    """One interpreter child and the framed conversation with it."""
+    """One interpreter runtime and the framed conversation with it."""
 
-    def __init__(self, process, cwd: str, cmd: list[str], env_fingerprint):
-        self.process = process
+    def __init__(self, live, cwd: str, cmd: list[str], env_fingerprint):
+        self.live = live
         self.cwd = cwd
         self.cmd = cmd
         self.env_fingerprint = dict(env_fingerprint or {})
         self.started_at = time.time()
-        self._lock = threading.Lock()
-        self._answers: queue.Queue = queue.Queue()
-        self._stderr: collections.deque = collections.deque(maxlen=STDERR_TAIL_LINES)
-        self._pump("vis-repl-stdout", process.stdout, self._answers.put, sentinel=True)
-        # Nothing else reads the child's stderr: left unread the pipe fills and
-        # the child BLOCKS mid-write, and once the process is reaped the stream
-        # is closed and a failed start loses exactly the words explaining it.
-        self._pump("vis-repl-stderr", process.stderr, self._stderr.append)
-
-    def _pump(self, name, stream, sink, sentinel=False):
-        def run():
-            try:
-                for line in stream:
-                    sink(line.rstrip("\n"))
-            except Exception:
-                pass
-            finally:
-                if sentinel:
-                    sink(None)
-
-        thread = threading.Thread(target=run, name=name, daemon=True)
-        thread.start()
-        return thread
 
     @property
     def pid(self) -> int:
-        return self.process.pid
+        return self.live.pid
 
     def is_alive(self) -> bool:
-        return self.process.poll() is None
+        return self.live.is_running
+
+    def exit_code(self):
+        return self.live.exit_code
 
     def stderr_tail(self) -> list[str]:
-        # Reached only after the child was reaped, so EOF is already on its way.
-        # The pause is for the loaded machine that has not scheduled the pump yet:
-        # without it a dead launch can answer with no tail at all, losing the one
-        # line that explains it.
+        # Whatever the interpreter says about itself stays on its own log, which
+        # this reads back the moment the runtime is found dead. The pause is for
+        # the loaded machine that has not written it yet: without it a dead
+        # launch can answer with no tail at all, losing the one line that
+        # explains it.
         deadline = time.time() + 0.5
-        while not self._stderr and time.time() < deadline:
+        tail = self.live.log_tail(STDERR_TAIL_LINES)
+        while not tail and time.time() < deadline:
             time.sleep(0.01)
-        return [line for line in self._stderr if line.strip()]
+            tail = self.live.log_tail(STDERR_TAIL_LINES)
+        return tail
 
     def displayed_cmd(self) -> list[str]:
-        # The inlined driver source is elided: this argv rides into `status`,
-        # the resource registry and the footer.
+        # The driver the interpreter runs is elided: this argv rides into
+        # `status`, the resource registry and the footer.
         return [*self.cmd[:-1], "<vis python driver>"]
 
     def request(self, payload: dict, timeout_s: float) -> dict:
-        with self._lock:
-            if not self.is_alive():
-                raise ReplError(
-                    "Python REPL closed the connection; start it again with "
-                    "py.repl_start()."
-                )
-            try:
-                self.process.stdin.write(json.dumps(payload) + "\n")
-                self.process.stdin.flush()
-            except (BrokenPipeError, ValueError, OSError) as ex:
-                self.kill()
-                raise ReplError(
-                    "Python REPL closed the connection; start it again with "
-                    f"py.repl_start(). ({ex})"
-                ) from ex
-            try:
-                line = self._answers.get(timeout=timeout_s)
-            except queue.Empty:
-                raise ReplError(
-                    f"Python eval timed out after {int(timeout_s * 1000)}ms"
-                ) from None
-            if line is None:
-                exit_code = self.process.poll()
-                self.kill()
-                raise ReplError(
-                    "Python REPL closed the connection; start it again with "
-                    f"py.repl_start(). (exit {exit_code}) "
-                    + " ".join(self.stderr_tail()[-3:])
-                )
-            try:
-                return json.loads(line)
-            except ValueError as ex:
-                self.kill()
-                raise ReplError(
-                    "Python REPL returned an invalid response and is dead; start it "
-                    "again with py.repl_start()."
-                ) from ex
+        try:
+            return self.live.request(payload, timeout_s)
+        except RuntimeGone as ex:
+            self.kill()
+            raise ReplError(
+                "Python REPL closed the connection; start it again with "
+                f"py.repl_start(). ({ex})"
+            ) from ex
+        except TimeoutError:
+            raise ReplError(
+                f"Python eval timed out after {int(timeout_s * 1000)}ms"
+            ) from None
 
     def kill(self) -> None:
-        for step in (self.process.terminate, self.process.kill):
-            if self.process.poll() is not None:
-                break
-            try:
-                step()
-                self.process.wait(timeout=2)
-            except Exception:
-                pass
-        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
-            try:
-                stream.close()
-            except Exception:
-                pass
+        self.live.stop()
 
 
 def _live(cwd: str) -> _Repl | None:
@@ -402,27 +345,29 @@ def start(options=None) -> dict:
         answer["id"] = repl_id
         return answer
 
-    cmd = [*detect_command(cwd), "-c", DRIVER]
-    process = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=_child_environment(options.get("env")),
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
-    repl = _Repl(process, cwd, cmd, options.get("env_fingerprint"))
+    meeting = runtime.Rendezvous("python").open()
+    try:
+        # The driver is a file next to the runtime's channels, not 17k of source
+        # on a command line the shell would have to carry through intact.
+        cmd = [*detect_command(cwd), meeting.place("driver.py", DRIVER)]
+        live = runtime.start(
+            cmd,
+            cwd=cwd,
+            env=_child_environment(options.get("env")),
+            meeting=meeting,
+        )
+    except BaseException:
+        meeting.close()
+        raise
+    repl = _Repl(live, cwd, cmd, options.get("env_fingerprint"))
     try:
         pong = repl.request({"op": "ping"}, PING_TIMEOUT_S)
         if pong.get("pong") is not True:
             raise ReplError("Python REPL did not acknowledge its startup ping")
     except Exception as ex:
-        repl.kill()
+        exit_code = repl.exit_code()
         tail = repl.stderr_tail()
+        repl.kill()
         answer = {
             "result": "failed",
             "status": "failed",
@@ -432,8 +377,8 @@ def start(options=None) -> dict:
             "cwd": cwd,
             "message": f"Python REPL failed its startup handshake: {ex}",
         }
-        if process.poll() is not None:
-            answer["exit"] = process.poll()
+        if exit_code is not None:
+            answer["exit"] = exit_code
         if tail:
             answer["log_tail"] = tail
         return answer

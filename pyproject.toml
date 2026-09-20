@@ -1,11 +1,11 @@
 [project]
 name = "vis-lang-python"
-version = "1.0.2"
+version = "1.1.0"
 description = "Python tools for Vis: ruff formatting and lint, pytest runs and a managed project REPL."
 requires-python = ">=3.11"
 dependencies = [
   "vis-agent>=0.2.10",
-  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v1.0.0",
+  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v2.0.0",
   "ruff>=0.14",
 ]
 
