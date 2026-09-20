@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 from vis_lang_interface import TestFailure, TestResult, process
+
 from vis_lang_python.repl import detect_command
 
 OUTPUT_TAIL = 4000

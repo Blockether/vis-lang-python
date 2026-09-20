@@ -1,6 +1,7 @@
 """Counts and failures are read from the report pytest writes, not its output."""
 
 import pytest
+
 from vis_lang_python import pytest_tool
 
 REPORT = """<?xml version="1.0" encoding="utf-8"?>

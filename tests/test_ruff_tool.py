@@ -3,6 +3,7 @@
 import json
 
 import pytest
+
 from vis_lang_python import ruff_tool
 
 

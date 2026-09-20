@@ -1,6 +1,7 @@
 """The managed REPL keeps its globals and never leaves a child behind."""
 
 import pytest
+
 from vis_lang_python.tools import PythonTools
 
 
