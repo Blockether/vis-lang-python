@@ -23,6 +23,8 @@ from pathlib import Path
 
 from vis_lang_interface import RuntimeGone, runtime
 
+from vis_lang_python import caches
+
 DRIVER = r"""import sys, json, io, ast, contextlib, traceback
 
 _G = {'__name__': '__vis_repl__'}
@@ -355,6 +357,7 @@ def start(options=None) -> dict:
             cwd=cwd,
             env=_child_environment(options.get("env")),
             meeting=meeting,
+            read_write=caches.granted_paths(),
         )
     except BaseException:
         meeting.close()

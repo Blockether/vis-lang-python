@@ -31,3 +31,19 @@ jobs:
         run: uv run ruff check .
       - name: Run the tests
         run: uv run --with pytest pytest tests -q
+
+  versions:
+    name: One version everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check that every version source agrees
+        run: |
+          set -euo pipefail
+          package=$(python3 -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          registered=$(python3 -c "import re,pathlib;print(re.search('version=\"([^\"]+)\"', pathlib.Path('extension.py').read_text()).group(1))")
+          if [ "$package" != "$registered" ]; then
+            echo "Package version $package disagrees with the registered extension version $registered." >&2
+            exit 1
+          fi
+          echo "Every version source says $package."
