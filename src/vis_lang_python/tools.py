@@ -16,6 +16,7 @@ from vis_lang_interface import (
     ReplResult,
     ReplSession,
     TestResult,
+    process,
     project_root,
     source_files,
 )
@@ -31,11 +32,59 @@ MARKERS = (
     ".git",
 )
 
+SESSION_ROOT_TIMEOUT_S = 30
+"""Seconds the one question about the session's own directory may take."""
+
+_SESSION_ROOT: dict[str, str] = {}
+"""Where the session lives, once the host has been asked."""
+
+
+def _asked_root():
+    """Where the host's shell runs, or an empty string when it cannot say.
+
+    Every command this extension starts goes through that shell, and the host
+    runs it in the session's workspace, so asking it once is asking the session
+    where it lives. A refusal or a timeout is nothing to fail a format or a test
+    run over: the caller keeps the process directory it used before.
+    """
+    try:
+        done = process.run([process.tool_path("pwd")], timeout_s=SESSION_ROOT_TIMEOUT_S)
+    except Exception:  # Any failure here only means the host cannot say.
+        return ""
+    answered = done.out.strip().splitlines()
+    return answered[-1].strip() if done.is_ok and answered else ""
+
+
+def session_root():
+    """The directory a relative path in a call means: the session's own.
+
+    Vis runs the engine, and every extension inside it, from its installation
+    directory, so `Path.cwd()` here is that checkout and not the project the
+    session is about. `cwd="."` therefore named `~/.vis/install/src`, and a
+    project elsewhere answered with a missing pytest or a file that was not
+    there (Blockether/vis#280). The host's shell knows where the session is, and
+    its answer holds as long as this process does. Outside Vis nothing hosts a
+    session, and the process directory is already the answer.
+    """
+    if not process.is_hosted():
+        return str(Path.cwd())
+    if not _SESSION_ROOT.get("root"):
+        answered = _asked_root()
+        if answered:
+            _SESSION_ROOT["root"] = answered
+    return _SESSION_ROOT.get("root") or str(Path.cwd())
+
+
+def _absolute(path):
+    """`path` as the caller means it: a relative name belongs to the session."""
+    named = Path(path).expanduser()
+    return named if named.is_absolute() else Path(session_root()) / named
+
 
 def _root(cwd, paths=()):
     """The project directory a call runs in."""
-    start = cwd or (paths[0] if paths else Path.cwd())
-    return str(project_root(start, MARKERS))
+    start = cwd or (paths[0] if paths else ".")
+    return str(project_root(_absolute(start), MARKERS))
 
 
 def _in_root(root, paths):
@@ -140,7 +189,7 @@ class PythonTools:
         globals are the work. Raises RuntimeError when the interpreter fails its
         startup handshake.
         """
-        answer = repl.start({"cwd": cwd or str(Path.cwd())})
+        answer = repl.start({"cwd": str(_absolute(cwd))})
         if answer.get("result") == "failed":
             detail = " ".join(answer.get("log_tail") or ())
             raise RuntimeError(
@@ -153,14 +202,14 @@ class PythonTools:
         cwd: Annotated[str, "Project directory the interpreter runs in."] = "",
     ) -> ReplSession:
         """Whether this directory has a live interpreter, and what launched it."""
-        return _session("python", repl.status({"cwd": cwd or str(Path.cwd())}))
+        return _session("python", repl.status({"cwd": str(_absolute(cwd))}))
 
     def repl_stop(
         self,
         cwd: Annotated[str, "Project directory the interpreter runs in."] = "",
     ) -> ReplSession:
         """Stop this directory's interpreter. Safe when none is running."""
-        return _session("python", repl.stop({"cwd": cwd or str(Path.cwd())}))
+        return _session("python", repl.stop({"cwd": str(_absolute(cwd))}))
 
     def repl_eval(
         self,
@@ -175,7 +224,7 @@ class PythonTools:
         the code printed. Start the REPL first: evaluating without one raises
         ReplError, as does an evaluation that outlives timeout_ms.
         """
-        directory = cwd or str(Path.cwd())
+        directory = str(_absolute(cwd))
         answer = repl.evaluate(
             {"code": code, "cwd": directory, "timeout_ms": timeout_ms}
         )

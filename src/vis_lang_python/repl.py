@@ -157,8 +157,9 @@ def abbreviate_home(path: str) -> str:
 
 
 def _project_dir(options) -> str:
-    """The canonical directory this call names. Vis resolves `cwd` before the
-    call; a direct caller gets the process directory."""
+    """The canonical directory this call names. `tools.session_root` resolves a
+    relative `cwd` against the session before it reaches here; a direct caller
+    gets the process directory."""
     raw = options.get("cwd") if isinstance(options, dict) else None
     return os.path.realpath(os.path.expanduser(_text(raw) or os.getcwd()))
 
