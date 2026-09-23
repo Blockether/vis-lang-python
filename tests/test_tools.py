@@ -1,7 +1,9 @@
 """Argument handling that does not need a toolchain installed."""
 
+import runpy
 from pathlib import Path
 
+import blockether.vis.extension as vis
 import pytest
 
 from vis_lang_python import tools
@@ -56,26 +58,8 @@ def test_absolute_paths_are_left_alone(tmp_path):
     assert tools._in_root(str(tmp_path), (absolute,)) == (absolute,)
 
 
-def _hosted_in(monkeypatch, session, spawns=None):
-    """Pretend Vis hosts this call, with its shell running in `session`."""
-    monkeypatch.setattr(tools, "_SESSION_ROOT", {})
-    monkeypatch.setattr(tools.process, "is_hosted", lambda: True)
-    monkeypatch.setattr(
-        tools.process, "tool_path", lambda name, hint="": f"/bin/{name}"
-    )
-
-    def answered(command, **options):
-        if spawns is not None:
-            spawns.append(tuple(command))
-        return tools.process.ToolRun(tuple(command), 0, f"{session}\n", "", 1)
-
-    monkeypatch.setattr(tools.process, "run", answered)
-
-
 def test_a_relative_cwd_is_the_session_and_not_the_vis_install(tmp_path, monkeypatch):
-    # Regression for Blockether/vis#280: `cwd="."` and an omitted `cwd` named
-    # Vis' own installation directory, so a project elsewhere answered with a
-    # missing pytest and with files that were not there.
+    # Blockether/vis#280: neither `cwd="."` nor an omitted cwd names Vis' install.
     session = tmp_path / "project"
     (session / "pkg").mkdir(parents=True)
     (session / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
@@ -83,49 +67,92 @@ def test_a_relative_cwd_is_the_session_and_not_the_vis_install(tmp_path, monkeyp
     install = tmp_path / "install"
     install.mkdir()
     monkeypatch.chdir(install)
-    _hosted_in(monkeypatch, session)
+    language = tools.PythonTools(workspace_root=lambda: session)
     root = str(session.resolve())
 
-    assert tools._root(".") == root
-    assert tools._root("") == root
-    assert tools._root("", ("pkg/thing.py",)) == root
+    assert language._root(".") == root
+    assert language._root("") == root
+    assert language._root("", ("pkg/thing.py",)) == root
     assert tools._in_root(root, ("pkg/thing.py",)) == (
         str(session.resolve() / "pkg" / "thing.py"),
     )
 
 
 def test_a_relative_repl_cwd_is_the_session_project(tmp_path, monkeypatch):
-    # The same regression on the REPL surface: a relative `cwd` asked about an
-    # interpreter in Vis' installation directory.
+    # Blockether/vis#280: status checks must target the session's interpreter.
     session = tmp_path / "project"
     session.mkdir()
     install = tmp_path / "install"
     install.mkdir()
     monkeypatch.chdir(install)
-    _hosted_in(monkeypatch, session)
+    language = tools.PythonTools(workspace_root=lambda: session)
 
-    assert tools.PythonTools().repl_status(cwd=".").directory == str(session.resolve())
-
-
-def test_the_session_directory_is_asked_for_once(tmp_path, monkeypatch):
-    spawns = []
-    _hosted_in(monkeypatch, tmp_path, spawns)
-
-    assert tools.session_root() == str(tmp_path)
-    assert tools.session_root() == str(tmp_path)
-    assert len(spawns) == 1
+    assert language.repl_status(cwd=".").directory == str(session.resolve())
 
 
-def test_a_host_that_cannot_answer_leaves_the_process_directory(tmp_path, monkeypatch):
-    def refused(command, **options):
-        raise RuntimeError("the jail refused this spawn")
+def test_outside_tools_use_the_process_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert tools._absolute("thing.py") == Path.cwd() / "thing.py"
+    assert tools._root(".") == str(Path.cwd())
 
-    monkeypatch.setattr(tools, "_SESSION_ROOT", {})
-    monkeypatch.setattr(tools.process, "is_hosted", lambda: True)
-    monkeypatch.setattr(
-        tools.process, "tool_path", lambda name, hint="": f"/bin/{name}"
-    )
-    monkeypatch.setattr(tools.process, "run", refused)
+
+def test_a_missing_host_root_does_not_silently_use_the_install(tmp_path, monkeypatch):
+    # Blockether/vis#280: a failed host lookup must not redirect tools to Vis' code.
     monkeypatch.chdir(tmp_path)
 
-    assert tools.session_root() == str(Path.cwd())
+    def unavailable():
+        raise RuntimeError("no session workspace")
+
+    language = tools.PythonTools(workspace_root=unavailable)
+    with pytest.raises(RuntimeError, match="no session workspace"):
+        language._root(".")
+
+
+def test_draft_switch_updates_relative_format_tests_and_repl(tmp_path, monkeypatch):
+    # Blockether/vis#280: an extension must follow the live working copy, not a cached `pwd`.
+    roots = (tmp_path / "source", tmp_path / "draft")
+    for root in roots:
+        (root / "pkg").mkdir(parents=True)
+        (root / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
+        (root / "pkg" / "thing.py").write_text("x = 1\n")
+    monkeypatch.chdir(tmp_path)
+    current = {"root": roots[0]}
+    language = tools.PythonTools(workspace_root=lambda: current["root"])
+    monkeypatch.setattr(
+        tools.ruff_tool,
+        "format_files",
+        lambda files, root, **options: (tuple(files), root),
+    )
+    monkeypatch.setattr(
+        tools.pytest_tool, "run", lambda paths, *, root, **options: root
+    )
+    monkeypatch.setattr(
+        tools.repl, "status", lambda request: {"cwd": request["cwd"], "status": "down"}
+    )
+
+    for root in roots:
+        current["root"] = root
+        files, selected = language.format_code(["pkg/thing.py"], cwd=".")
+        assert files == ((root / "pkg" / "thing.py").resolve(),)
+        assert selected == str(root.resolve())
+        assert language.run_tests(cwd=".") == str(root.resolve())
+        assert language.repl_status(cwd=".").directory == str(root.resolve())
+
+
+def test_entrypoint_binds_the_live_sdk_workspace_root(tmp_path, monkeypatch):
+    # Blockether/vis#280: registration must pass the SDK door, not a sampled path.
+    roots = (tmp_path / "source", tmp_path / "draft")
+    for root in roots:
+        root.mkdir()
+        (root / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
+    current = {"root": roots[0]}
+    registered = []
+    monkeypatch.setattr(vis, "workspace_root", lambda: current["root"])
+    monkeypatch.setattr(vis, "register_extension", registered.append)
+
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / "extension.py"))
+    assert len(registered) == 1
+    language = registered[0].symbols[0].fn
+    for root in roots:
+        current["root"] = root
+        assert language._root(".") == str(root.resolve())
