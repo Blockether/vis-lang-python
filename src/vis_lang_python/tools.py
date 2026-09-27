@@ -56,14 +56,18 @@ def _in_root(root, paths):
 
 
 def _session(language, answer):
-    """A `repl` answer as a `ReplSession`."""
+    """A `repl` answer as a `ReplSession`, its detail in plain words."""
+    is_running = answer.get("status") == "up"
+    happened = answer.get("result", "")
+    if happened == "status":
+        happened = "running" if is_running else "not running"
     return ReplSession(
         language,
         repl.abbreviate_home(answer["cwd"]),
         answer["cwd"],
         tuple(answer.get("cmd") or ()),
-        answer.get("status") == "up",
-        answer.get("result", ""),
+        is_running,
+        happened.replace("-", " "),
     )
 
 

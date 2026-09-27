@@ -16,7 +16,9 @@ def project(tmp_path):
 
 def test_status_is_down_before_a_start(project):
     tools, cwd = project
-    assert tools.repl_status(cwd=cwd).is_running is False
+    status = tools.repl_status(cwd=cwd)
+    assert status.is_running is False
+    assert status.detail == "not running"
 
 
 def test_globals_survive_between_evaluations(project):
@@ -44,8 +46,9 @@ def test_a_second_start_keeps_the_live_repl(project):
     first = tools.repl_start(cwd=cwd)
     tools.repl_eval("kept = 7", cwd=cwd)
     again = tools.repl_start(cwd=cwd)
-    assert again.detail == "already-running"
+    assert again.detail == "already running"
     assert again.id == first.id
+    assert tools.repl_status(cwd=cwd).detail == "running"
     assert tools.repl_eval("kept", cwd=cwd).value == "7"
 
 
@@ -53,7 +56,7 @@ def test_stopping_without_a_repl_is_safe(project):
     tools, cwd = project
     stopped = tools.repl_stop(cwd=cwd)
     assert stopped.is_running is False
-    assert stopped.detail == "not-managed"
+    assert stopped.detail == "not managed"
 
 
 def test_evaluating_without_a_repl_says_so(project):
