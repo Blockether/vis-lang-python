@@ -127,7 +127,13 @@ def test_draft_switch_updates_relative_format_tests_and_repl(tmp_path, monkeypat
         tools.pytest_tool, "run", lambda paths, *, root, **options: root
     )
     monkeypatch.setattr(
+        tools.repl, "start", lambda request: {"cwd": request["cwd"], "status": "up"}
+    )
+    monkeypatch.setattr(
         tools.repl, "status", lambda request: {"cwd": request["cwd"], "status": "down"}
+    )
+    monkeypatch.setattr(
+        tools.repl, "stop", lambda request: {"cwd": request["cwd"], "status": "down"}
     )
 
     for root in roots:
@@ -136,6 +142,12 @@ def test_draft_switch_updates_relative_format_tests_and_repl(tmp_path, monkeypat
         assert files == ((root / "pkg" / "thing.py").resolve(),)
         assert selected == str(root.resolve())
         assert language.run_tests(cwd=".") == str(root.resolve())
+        for operation in (
+            language.repl_start,
+            language.repl_status,
+            language.repl_stop,
+        ):
+            assert operation().directory == str(root.resolve())
         assert language.repl_status(cwd=".").directory == str(root.resolve())
 
 
