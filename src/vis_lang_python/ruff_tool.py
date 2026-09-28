@@ -7,12 +7,17 @@ extension installs is used, so the tools still work in a bare directory.
 
 from __future__ import annotations
 
-import difflib
 import json
 import shutil
 from pathlib import Path
 
-from vis_lang_interface import Diagnostic, FormatResult, LintResult, process
+from vis_lang_interface import (
+    Diagnostic,
+    FormatResult,
+    LintResult,
+    line_changes,
+    process,
+)
 
 SUFFIXES = (".py", ".pyi")
 INSTALL_HINT = "install it with `pip install ruff`, or add it to the project."
@@ -44,19 +49,6 @@ def ruff_path(root):
         return str(find_ruff_bin())
     except (ImportError, FileNotFoundError):
         return process.tool_path("ruff", INSTALL_HINT)
-
-
-def line_changes(before, after):
-    """Lines `after` adds to and removes from `before`; a changed line counts as both."""
-    added = removed = 0
-    matcher = difflib.SequenceMatcher(
-        None, before.splitlines(), after.splitlines(), autojunk=False
-    )
-    for tag, first, last, start, end in matcher.get_opcodes():
-        if tag != "equal":
-            removed += last - first
-            added += end - start
-    return added, removed
 
 
 def format_files(paths, root, *, is_written=False):

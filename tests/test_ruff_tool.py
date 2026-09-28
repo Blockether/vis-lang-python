@@ -162,6 +162,8 @@ def test_linting_a_source_string_reports_ruffs_findings(tmp_path):
     assert {one.path for one in found.diagnostics} == {"<stdin>"}
 
 
-def test_a_changed_line_counts_as_removed_and_added():
-    assert ruff_tool.line_changes("a\nb\nc\n", "a\nB\nc\nd\n") == (2, 1)
-    assert ruff_tool.line_changes("same\n", "same\n") == (0, 0)
+@pytest.mark.skipif(not ruff_tool.shutil.which("ruff"), reason="ruff is not installed")
+def test_a_final_newline_ruff_adds_counts_as_a_changed_line(tmp_path):
+    result = ruff_tool.format_source("x = 1", str(tmp_path))
+    assert result.source == "x = 1\n"
+    assert (result.lines_added, result.lines_removed) == (1, 1)
