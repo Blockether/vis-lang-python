@@ -25,7 +25,7 @@ from vis_lang_interface import RuntimeGone, runtime
 
 from vis_lang_python import caches
 
-DRIVER = r"""import sys, json, io, ast, contextlib, traceback
+DRIVER = r"""import sys, json, io, ast, contextlib, pprint, traceback
 
 _G = {'__name__': '__vis_repl__'}
 
@@ -33,6 +33,10 @@ _G = {'__name__': '__vis_repl__'}
 def _repr(value):
     try:
         s = repr(value)
+        # A long container reads better laid out by pprint, one item per line;
+        # text stays one literal and a huge value keeps its plain repr.
+        if 88 < len(s) <= 8000 and not isinstance(value, (str, bytes, bytearray)):
+            s = pprint.pformat(value, width=88, sort_dicts=False)
     except Exception as ex:
         s = '<unreprable ' + type(value).__name__ + ': ' + str(ex) + '>'
     return s[:8000]

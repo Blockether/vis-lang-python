@@ -79,3 +79,19 @@ def test_the_interpreter_is_handed_the_caches_it_downloads_into(tmp_path, monkey
         repl.start({"cwd": str(tmp_path)})
     assert caches.uv_cache() in seen["read_write"]
     assert caches.uv_interpreters() in seen["read_write"]
+
+
+def test_a_long_value_comes_back_pretty_printed(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    answer = tools.repl_eval("{f'key{n}': list(range(n)) for n in range(6)}", cwd=cwd)
+    assert answer.value.splitlines() == [
+        "{'key0': [],",
+        " 'key1': [0],",
+        " 'key2': [0, 1],",
+        " 'key3': [0, 1, 2],",
+        " 'key4': [0, 1, 2, 3],",
+        " 'key5': [0, 1, 2, 3, 4]}",
+    ]
+    assert tools.repl_eval("[1, 2, 3]", cwd=cwd).value == "[1, 2, 3]"
+    assert tools.repl_eval("'x' * 100", cwd=cwd).value == repr("x" * 100)

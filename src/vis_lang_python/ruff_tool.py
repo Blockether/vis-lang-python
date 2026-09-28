@@ -7,6 +7,7 @@ extension installs is used, so the tools still work in a bare directory.
 
 from __future__ import annotations
 
+import difflib
 import json
 import shutil
 from pathlib import Path
@@ -45,6 +46,19 @@ def ruff_path(root):
         return process.tool_path("ruff", INSTALL_HINT)
 
 
+def line_changes(before, after):
+    """Lines `after` adds to and removes from `before`; a changed line counts as both."""
+    added = removed = 0
+    matcher = difflib.SequenceMatcher(
+        None, before.splitlines(), after.splitlines(), autojunk=False
+    )
+    for tag, first, last, start, end in matcher.get_opcodes():
+        if tag != "equal":
+            removed += last - first
+            added += end - start
+    return added, removed
+
+
 def format_files(paths, root, *, is_written=False):
     """Report, and optionally apply, ruff's formatting.
 
@@ -72,20 +86,25 @@ def format_files(paths, root, *, is_written=False):
     if done.exit_code == 0:
         return FormatResult("python", (), tuple(names))
     changed, unchanged = [], []
+    added = removed = 0
     for name in names:
         before = Path(name).read_text(encoding="utf-8")
-        after = format_source(before, root, name).source
-        if after == before:
+        formatted = format_source(before, root, name)
+        if formatted.source == before:
             unchanged.append(name)
             continue
         changed.append(name)
+        added += formatted.lines_added
+        removed += formatted.lines_removed
         if is_written:
-            Path(name).write_text(after, encoding="utf-8")
+            Path(name).write_text(formatted.source, encoding="utf-8")
     return FormatResult(
         "python",
         tuple(changed),
         tuple(unchanged),
         is_written=is_written and bool(changed),
+        lines_added=added,
+        lines_removed=removed,
     )
 
 
@@ -107,7 +126,10 @@ def format_source(source, root, name=""):
     done = process.run([*command, "-"], cwd=root, stdin=source)
     if done.exit_code != 0:
         raise ValueError(f"ruff could not format the source: {done.err.strip()}")
-    return FormatResult("python", (), (), source=done.out)
+    added, removed = line_changes(source, done.out)
+    return FormatResult(
+        "python", (), (), source=done.out, lines_added=added, lines_removed=removed
+    )
 
 
 def check_files(paths, root, *, is_fixed=False):

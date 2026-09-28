@@ -6,14 +6,16 @@ from vis_lang_interface import presentation, prompt
 from vis_lang_python.tools import PythonTools
 
 
-def _bind(name, label, build, *, tag="observation", show_start=True):
+def _bind(name, label, build, *, tag="observation", show_start=True, describe=None):
     """Attach one Activity presentation to a method of PythonTools."""
     setattr(
         PythonTools,
         name,
         vis.method(
             tag=tag,
-            activity=presentation.activity(label, build, show_start=show_start),
+            activity=presentation.activity(
+                label, build, show_start=show_start, describe=describe
+            ),
         )(getattr(PythonTools, name)),
     )
 
@@ -74,6 +76,7 @@ _bind(
     "Evaluate in Python REPL",
     lambda result: presentation.repl_presentation("Evaluate in Python REPL", result),
     tag="mutation",
+    describe=presentation.code_argument("python"),
 )
 
 PROMPT = prompt.routing(

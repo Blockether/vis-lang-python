@@ -63,6 +63,7 @@ def test_a_non_json_report_is_refused():
 def test_formatting_a_source_string_round_trips(tmp_path):
     result = ruff_tool.format_source("x = [1,2]\n", str(tmp_path))
     assert result.source == "x = [1, 2]\n"
+    assert (result.lines_added, result.lines_removed) == (1, 1)
 
 
 @pytest.mark.skipif(not ruff_tool.shutil.which("ruff"), reason="ruff is not installed")
@@ -101,6 +102,7 @@ def test_the_files_that_differ_come_from_ruffs_output(tmp_path, monkeypatch):
     names = [str(messy), str(tidy)]
     found = ruff_tool.format_files(names, str(tmp_path))
     assert (found.changed, found.unchanged) == ((str(messy),), (str(tidy),))
+    assert (found.lines_added, found.lines_removed) == (1, 1)
     assert not found.is_written
     assert messy.read_text() == "x = [1,2]\n"
     written = ruff_tool.format_files(names, str(tmp_path), is_written=True)
@@ -158,3 +160,8 @@ def test_linting_a_source_string_reports_ruffs_findings(tmp_path):
     found = ruff_tool.check_source("import os\nx = undefined_name\n", str(tmp_path))
     assert {one.rule for one in found.diagnostics} >= {"F401", "F821"}
     assert {one.path for one in found.diagnostics} == {"<stdin>"}
+
+
+def test_a_changed_line_counts_as_removed_and_added():
+    assert ruff_tool.line_changes("a\nb\nc\n", "a\nB\nc\nd\n") == (2, 1)
+    assert ruff_tool.line_changes("same\n", "same\n") == (0, 0)

@@ -7,6 +7,7 @@ and from Vis.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -69,6 +70,18 @@ def _session(language, answer):
         is_running,
         happened.replace("-", " "),
     )
+
+
+def _pretty(code, root):
+    """`code` as ruff formats it in `root`, or as given when ruff cannot format it.
+
+    Only the evaluation's presentation uses it, so a missing ruff or code that
+    does not parse must never fail the evaluation itself.
+    """
+    try:
+        return ruff_tool.format_source(code, root).source.rstrip()
+    except Exception:
+        return code.rstrip()
 
 
 class PythonTools:
@@ -199,11 +212,13 @@ class PythonTools:
     ) -> ReplResult:
         """Evaluate code in the live interpreter, keeping globals between calls.
 
-        The value of a trailing expression comes back as its repr, with anything
-        the code printed. Start the REPL first: evaluating without one raises
+        The value of a trailing expression comes back as its repr, laid out by
+        pprint when it is long, with anything the code printed and the code as
+        ruff formats it. Start the REPL first: evaluating without one raises
         ReplError, as does an evaluation that outlives timeout_ms.
         """
         directory = str(self._absolute(cwd))
+        started = time.monotonic()
         answer = repl.evaluate(
             {"code": code, "cwd": directory, "timeout_ms": timeout_ms}
         )
@@ -213,6 +228,7 @@ class PythonTools:
             answer.get("value") or "",
             (answer.get("out") or "") + (answer.get("err") or ""),
             answer.get("exc") or "",
-            0,
+            round((time.monotonic() - started) * 1000),
             True,
+            code=_pretty(code, directory),
         )

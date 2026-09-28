@@ -237,3 +237,59 @@ def test_an_older_host_records_lint_and_test_runs_as_reads(monkeypatch):
     tags = _entrypoint_tags(monkeypatch)
     assert (tags["lint_code"], tags["run_tests"]) == ("observation", "observation")
     assert tags["repl_eval"] == "mutation"
+
+
+def test_an_evaluation_answers_its_code_as_ruff_formats_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.repl, "evaluate", lambda request: {"value": "3"})
+    monkeypatch.setattr(
+        tools.ruff_tool,
+        "format_source",
+        lambda code, root: tools.FormatResult("python", (), (), source="x = 1 + 2\n"),
+    )
+    ticks = iter([10.0, 10.25])
+    monkeypatch.setattr(tools.time, "monotonic", lambda: next(ticks, 10.25))
+    answer = tools.PythonTools().repl_eval("x=1+2", cwd=str(tmp_path))
+    assert (answer.code, answer.value, answer.duration_ms) == ("x = 1 + 2", "3", 250)
+
+
+def test_code_ruff_cannot_format_is_shown_as_given(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.repl, "evaluate", lambda request: {"exc": "SyntaxError"})
+
+    def refuse(code, root):
+        raise ValueError("ruff could not format the source")
+
+    monkeypatch.setattr(tools.ruff_tool, "format_source", refuse)
+    answer = tools.PythonTools().repl_eval("def (:\n", cwd=str(tmp_path))
+    assert (answer.code, answer.error) == ("def (:", "SyntaxError")
+
+
+def test_every_tool_owns_an_activity_and_an_evaluation_shows_its_code(monkeypatch):
+    registered = []
+    monkeypatch.setattr(vis, "register_extension", registered.append)
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / "extension.py"))
+    members = registered[0].symbols[0].contract["members"]
+    for name in (member["name"].rsplit(".", 1)[-1] for member in members):
+        label = getattr(tools.PythonTools, name).__vis_symbol_activity__.label
+        assert label[:1].isupper() and "_" not in label, name
+
+    activity = tools.PythonTools.repl_eval.__vis_symbol_activity__
+    running = activity.render(phase="start", args=(), kwargs={"code": "1 + 2"})
+    assert (running.headline, running.summary) == ("Evaluate in Python REPL", "running")
+    assert [
+        (block.text, getattr(block, "language", None)) for block in running.content
+    ] == [
+        ("Code", None),
+        ("1 + 2", "python"),
+    ]
+    failed = activity.render(
+        phase="failure",
+        args=(),
+        kwargs={"code": "boom()"},
+        error=RuntimeError("no REPL"),
+    )
+    assert [block.text for block in failed.content] == [
+        "Code",
+        "boom()",
+        "Error",
+        "no REPL",
+    ]

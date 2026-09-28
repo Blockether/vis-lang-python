@@ -5,7 +5,7 @@ description = "Python tools for Vis: ruff formatting and lint, pytest runs and a
 requires-python = ">=3.11"
 dependencies = [
   "vis-agent>=0.2.26",
-  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v2.2.0",
+  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v2.3.0",
   "ruff>=0.14",
 ]
 
