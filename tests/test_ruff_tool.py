@@ -7,13 +7,15 @@ import pytest
 from vis_lang_python import ruff_tool
 
 
-def _report(code, message="undefined name", row=3, column=5):
+def _report(
+    code, message="undefined name", row=3, column=5, filename="/project/app/main.py"
+):
     return json.dumps(
         [
             {
                 "code": code,
                 "message": message,
-                "filename": "/project/app/main.py",
+                "filename": filename,
                 "location": {"row": row, "column": column},
             }
         ]
@@ -32,6 +34,12 @@ def test_a_broken_code_rule_is_an_error():
     assert ruff_tool.diagnostics_of(_report("F821"))[0].level == "error"
     assert ruff_tool.diagnostics_of(_report("E902", "unreadable"))[0].level == "error"
     assert ruff_tool.diagnostics_of(_report("E999", "syntax"))[0].level == "error"
+    # Regression: ruff names a syntax error `invalid-syntax` rather than a rule
+    # code, and such findings were reported as style warnings.
+    assert (
+        ruff_tool.diagnostics_of(_report("invalid-syntax", "syntax"))[0].level
+        == "error"
+    )
     assert (
         ruff_tool.diagnostics_of(_report("E501", "line too long"))[0].level == "warning"
     )
@@ -70,7 +78,7 @@ def test_formatting_a_file_rewrites_it_only_when_asked(tmp_path):
 
 
 def _stub_ruff(monkeypatch, run):
-    """Run `format_files` against `run` instead of an installed ruff."""
+    """Run ruff's callers against `run` instead of an installed ruff."""
     monkeypatch.setattr(ruff_tool, "ruff_path", lambda root: "ruff")
     monkeypatch.setattr(ruff_tool.process, "run", run)
 
@@ -113,3 +121,40 @@ def test_a_formatted_tree_runs_ruff_once(tmp_path, monkeypatch):
     assert (found.changed, found.unchanged) == ((), ("a.py", "b.py"))
     assert not found.is_written
     assert len(commands) == 1
+
+
+def test_source_text_is_linted_from_stdin(tmp_path, monkeypatch):
+    # Regression: only files could be linted. Ruff names text it reads on stdin
+    # `-`; findings for it are reported as `<stdin>`, as the Clojure tools do.
+    seen = {}
+
+    def run(command, *, cwd=None, timeout_s=300, stdin=None, env=None):
+        seen.update(command=command, cwd=cwd, stdin=stdin)
+        report = _report("F821", filename="-")
+        return ruff_tool.process.ToolRun(tuple(command), 1, report, "", 0)
+
+    _stub_ruff(monkeypatch, run)
+    found = ruff_tool.check_source("x = y\n", str(tmp_path))
+    assert seen["command"][1:3] == ["check", "--output-format"]
+    assert seen["command"][-1] == "-"
+    assert (seen["cwd"], seen["stdin"]) == (str(tmp_path), "x = y\n")
+    assert found.files == 1
+    assert [(one.path, one.level, one.rule) for one in found.diagnostics] == [
+        ("<stdin>", "error", "F821")
+    ]
+
+
+def test_a_source_ruff_cannot_check_is_refused(tmp_path, monkeypatch):
+    def run(command, *, cwd=None, timeout_s=300, stdin=None, env=None):
+        return ruff_tool.process.ToolRun(tuple(command), 2, "", "bad config", 0)
+
+    _stub_ruff(monkeypatch, run)
+    with pytest.raises(RuntimeError, match="bad config"):
+        ruff_tool.check_source("x = 1\n", str(tmp_path))
+
+
+@pytest.mark.skipif(not ruff_tool.shutil.which("ruff"), reason="ruff is not installed")
+def test_linting_a_source_string_reports_ruffs_findings(tmp_path):
+    found = ruff_tool.check_source("import os\nx = undefined_name\n", str(tmp_path))
+    assert {one.rule for one in found.diagnostics} >= {"F401", "F821"}
+    assert {one.path for one in found.diagnostics} == {"<stdin>"}

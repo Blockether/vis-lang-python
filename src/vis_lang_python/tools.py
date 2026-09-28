@@ -109,18 +109,26 @@ class PythonTools:
 
     def lint_code(
         self,
-        paths: Annotated[list[str], "Files or directories to lint."],
+        paths: Annotated[list[str], "Files or directories to lint."] = (),
         *,
+        source: Annotated[str, "Lint this text instead of files."] = "",
         cwd: Annotated[str, "Project directory; inferred from paths when empty."] = "",
         is_fixed: Annotated[bool, "Apply ruff's safe fixes first."] = False,
     ) -> LintResult:
         """Lint Python with ruff and report every finding it located.
 
         Findings keep ruff's own rule codes. Syntax errors and undefined names
-        are reported as errors, every other rule as a warning. Raises
-        ToolMissing when no ruff is installed.
+        are reported as errors, every other rule as a warning. With source, that
+        text is linted under the project's settings and its findings are
+        reported against `<stdin>`; nothing is written, so is_fixed needs paths.
+        Raises ToolMissing when no ruff is installed and ValueError when neither
+        source nor paths are given.
         """
         root = self._root(cwd, tuple(paths))
+        if source:
+            if is_fixed:
+                raise ValueError("is_fixed rewrites files; pass paths to apply fixes")
+            return ruff_tool.check_source(source, root)
         files = source_files(_in_root(root, paths), ruff_tool.SUFFIXES)
         if not files:
             raise ValueError("no Python file in the given paths")

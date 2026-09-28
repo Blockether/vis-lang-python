@@ -18,6 +18,10 @@ INSTALL_HINT = "install it with `pip install ruff`, or add it to the project."
 # Ruff reports no severity. These families are real defects rather than style:
 # E9 is a syntax error, F6/F7/F8 are broken or undefined code.
 ERROR_PREFIXES = ("E9", "F6", "F7", "F8")
+# Ruff names a syntax error this way instead of giving it a rule code.
+SYNTAX_ERROR = "invalid-syntax"
+# Ruff calls text read on stdin `-`; findings for it are reported under this name.
+STDIN = "<stdin>"
 
 
 def ruff_path(root):
@@ -133,6 +137,31 @@ def check_files(paths, root, *, is_fixed=False):
     return LintResult.of("python", diagnostics_of(done.out, root), len(names))
 
 
+def check_source(source, root, name=""):
+    """Every ruff finding for `source`, which is read on stdin and never written.
+
+    Args:
+        source: Text to lint.
+        root: Project directory ruff runs in, so it reads the project's config.
+        name: File the text comes from, so ruff reads that file's settings.
+
+    Returns:
+        A `LintResult` for one file. Without `name`, its findings are reported
+        against `<stdin>`.
+
+    Raises:
+        ToolMissing: ruff is not installed.
+        RuntimeError: ruff could not run.
+    """
+    command = [ruff_path(root), "check", "--output-format", "json", "--quiet"]
+    if name:
+        command += ["--stdin-filename", name]
+    done = process.run([*command, "-"], cwd=root, stdin=source)
+    if done.exit_code not in (0, 1):
+        raise RuntimeError(f"ruff check failed: {(done.err or done.out).strip()}")
+    return LintResult.of("python", diagnostics_of(done.out, root), 1)
+
+
 def diagnostics_of(report, root=""):
     """Ruff's JSON report as contract diagnostics.
 
@@ -150,9 +179,12 @@ def diagnostics_of(report, root=""):
         code = row.get("code") or ""
         location = row.get("location") or {}
         path = row.get("filename") or ""
-        if root and path.startswith(str(root)):
+        if path == "-":
+            path = STDIN
+        elif root and path.startswith(str(root)):
             path = str(Path(path).relative_to(root))
-        level = "error" if code.startswith(ERROR_PREFIXES) or not code else "warning"
+        is_error = not code or code == SYNTAX_ERROR or code.startswith(ERROR_PREFIXES)
+        level = "error" if is_error else "warning"
         findings.append(
             Diagnostic(
                 path,

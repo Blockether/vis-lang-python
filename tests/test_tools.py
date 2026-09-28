@@ -31,6 +31,29 @@ def test_linting_needs_python_files(tmp_path):
         tools.PythonTools().lint_code([str(tmp_path)])
 
 
+def test_source_text_is_linted_without_files(tmp_path, monkeypatch):
+    # Regression: lint_code took only paths, so linting a snippet failed with
+    # TypeError while format_code and the Clojure tools accept source text.
+    seen = {}
+
+    def remember(source, root, **options):
+        seen.update(source=source, root=root)
+        return "linted"
+
+    monkeypatch.setattr(tools.ruff_tool, "check_source", remember)
+    assert (
+        tools.PythonTools().lint_code(source="x = 1\n", cwd=str(tmp_path)) == "linted"
+    )
+    assert seen == {"source": "x = 1\n", "root": str(tmp_path.resolve())}
+
+
+def test_source_text_is_never_fixed(tmp_path):
+    with pytest.raises(ValueError, match="is_fixed"):
+        tools.PythonTools().lint_code(
+            source="x = 1\n", cwd=str(tmp_path), is_fixed=True
+        )
+
+
 def test_relative_paths_are_resolved_against_cwd(tmp_path, monkeypatch):
     # Regression: `cwd` named the project while relative `paths` were read from
     # Vis' own process directory, so a project elsewhere failed with
