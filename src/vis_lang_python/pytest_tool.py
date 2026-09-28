@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import tempfile
 import xml.etree.ElementTree as ElementTree
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from vis_lang_interface import TestFailure, TestResult, process
 
@@ -48,6 +48,9 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
             "-q",
             "-p",
             "no:cacheprovider",
+            # xunit1 keeps the file and line of each case; xunit2 drops both.
+            "-o",
+            "junit_family=xunit1",
             f"--junit-xml={report}",
         ]
         if keyword:
@@ -61,6 +64,27 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
                 raise process.ToolMissing(f"pytest is not installed. {INSTALL_HINT}")
             raise RuntimeError(f"pytest wrote no report: {output.strip()[-1000:]}")
         return result_of(report.read_text(encoding="utf-8"), output, done.duration_ms)
+
+
+def _test_name(case):
+    """A case's name under its classes, nested names joined with ' › '.
+
+    pytest spells the classname as the dotted module path, then any classes, so
+    with the file known, what follows the module is the chain of classes.
+    """
+    name = case.get("name") or ""
+    classname = case.get("classname") or ""
+    path = case.get("file") or ""
+    module = str(PurePosixPath(path).with_suffix("")).replace("/", ".") if path else ""
+    if module and classname.startswith(module + "."):
+        return " › ".join([*classname[len(module) + 1 :].split("."), name])
+    return name
+
+
+def _line(case):
+    """The 1-based line of a case, or 0 when the report has none."""
+    line = case.get("line")
+    return int(line) + 1 if line else 0
 
 
 def result_of(report, output="", duration_ms=0):
@@ -84,9 +108,9 @@ def result_of(report, output="", duration_ms=0):
             for problem in [*case.findall("failure"), *case.findall("error")]:
                 failures.append(
                     TestFailure(
-                        case.get("name") or "",
+                        _test_name(case),
                         case.get("file") or "",
-                        int(case.get("line") or 0) + 1,
+                        _line(case),
                         (problem.get("message") or problem.text or "").strip(),
                     )
                 )

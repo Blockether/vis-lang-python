@@ -77,3 +77,34 @@ def test_a_run_asks_for_the_caches_and_the_directory_it_reports_into(
     # The JUnit report is written outside the project, so the run is handed that
     # directory too: confined without it, pytest has nowhere to write the report.
     assert str(Path(seen["report"]).parent) in granted
+
+
+def test_a_real_failure_is_named_with_its_class_and_located(tmp_path):
+    (tmp_path / "test_math.py").write_text(
+        "class TestSum:\n    def test_bad(self):\n        assert 1 + 1 == 3\n"
+    )
+    failure = pytest_tool.run(root=str(tmp_path), timeout_s=120).failures[0]
+    assert (failure.test, failure.path, failure.line) == (
+        "TestSum › test_bad",
+        "test_math.py",
+        2,
+    )
+    assert failure.message.splitlines()[0] == "assert (1 + 1) == 3"
+
+
+NESTED = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1">
+<testcase classname="tests.test_a.TestOuter.TestInner" name="test_x" file="tests/test_a.py">
+<error message="failed on setup with fixture 'db' not found">E fixture</error></testcase>
+</testsuite></testsuites>
+"""
+
+
+def test_nested_classes_name_a_failure_and_a_missing_line_stays_unknown():
+    failure = pytest_tool.result_of(NESTED).failures[0]
+    assert (failure.test, failure.path, failure.line) == (
+        "TestOuter › TestInner › test_x",
+        "tests/test_a.py",
+        0,
+    )
+    assert failure.message == "failed on setup with fixture 'db' not found"
