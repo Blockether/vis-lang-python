@@ -1,16 +1,16 @@
 """The managed Python REPL this extension owns.
 
 `py.repl_start`, `py.repl_status`, `py.repl_stop` and `py.repl_eval` reach this
-module. It launches the project's own interpreter — uv, Poetry, a `.venv` or
-`python3` — as a persistent child running a small line-framed eval server: one
-JSON request per line in, one JSON answer per line out, with globals that live
-between evaluations, which is what makes it a REPL rather than a series of
-scripts.
+module. It launches the project's own interpreter as a persistent child: uv,
+Poetry, a `.venv` or `python3`. The child runs a small line-framed eval server.
+One JSON request goes in per line, and one JSON answer comes out per line.
+Globals live between evaluations. That is what makes it a REPL and not a series
+of scripts.
 
-One runtime per project directory, owned by this extension and confined by the
-workspace jail like everything else a language tool starts: closing the channel
-it reads is what ends it, so an extension that goes away never leaves an
-interpreter behind.
+There is one runtime per project directory. This extension owns it, and the
+workspace jail confines it like everything else that a language tool starts.
+Closing the channel that it reads ends it. So an extension that goes away never
+leaves an interpreter behind.
 """
 
 from __future__ import annotations
@@ -161,9 +161,9 @@ def abbreviate_home(path: str) -> str:
 
 
 def _project_dir(options) -> str:
-    """The canonical directory this call names. `tools.session_root` resolves a
-    relative `cwd` against the session before it reaches here; a direct caller
-    gets the process directory."""
+    """The real path of the directory that this call names. `tools.session_root`
+    resolves a relative `cwd` against the session before it reaches here. A
+    direct caller gets the process directory."""
     raw = options.get("cwd") if isinstance(options, dict) else None
     return os.path.realpath(os.path.expanduser(_text(raw) or os.getcwd()))
 
@@ -179,10 +179,11 @@ def _repl_id(options, cwd: str) -> str:
 def _venv_python(root: Path) -> str | None:
     """ABSOLUTE path of a project-local virtualenv's interpreter, or None.
 
-    Never RESOLVED: `.venv/bin/python3` is a symlink chain ending at the base
-    installation, and following it walks out of the virtualenv — `sys.prefix`
-    becomes the base prefix, `pyvenv.cfg` is never read, and the run dies with
-    `No module named pytest` while the same suite passes under `.venv/bin/python`.
+    Never RESOLVED: `.venv/bin/python3` is a symlink chain that ends at the base
+    installation. Following it leaves the virtualenv. Then `sys.prefix` becomes
+    the base prefix and `pyvenv.cfg` is never read. The run fails with
+    `No module named pytest`, while the same suite passes under
+    `.venv/bin/python`.
     """
     for venv in (".venv", "venv"):
         for name in ("bin/python", "bin/python3"):
@@ -193,10 +194,10 @@ def _venv_python(root: Path) -> str | None:
 
 
 def _is_uv_project(root: Path) -> bool:
-    """A `uv.lock`, or a real `[tool.uv]` table in `pyproject.toml` — read as
-    TOML, never as substring soup: `[tool.uvicorn]`, a commented-out `[tool.uv]`
-    and a description that merely mentions one are not uv projects, and picking
-    `uv run python` for them launches the wrong interpreter."""
+    """A `uv.lock`, or a real `[tool.uv]` table in `pyproject.toml`, read as
+    TOML and never as a substring search. `[tool.uvicorn]`, a commented-out
+    `[tool.uv]` or a description that only mentions one is not a uv project.
+    Picking `uv run python` for those launches the wrong interpreter."""
     if (root / "uv.lock").is_file():
         return True
     pyproject = root / "pyproject.toml"
@@ -212,10 +213,10 @@ def _is_uv_project(root: Path) -> bool:
 
 
 def detect_command(cwd: str) -> list[str]:
-    """The argv PREFIX that launches a project-aware Python in `cwd`, first hit
-    winning: uv (`uv.lock` / `[tool.uv]` plus `uv` on PATH), Poetry
-    (`poetry.lock` plus `poetry` on PATH), a project virtualenv, then the
-    system interpreter."""
+    """The argv PREFIX that launches a project-aware Python in `cwd`. The first
+    match wins, in this order: uv, Poetry, a project virtualenv, then the system
+    interpreter. uv needs `uv.lock` or `[tool.uv]`, plus `uv` on PATH. Poetry
+    needs `poetry.lock`, plus `poetry` on PATH."""
     root = Path(cwd)
     if _is_uv_project(root) and shutil.which("uv"):
         return ["uv", "run", "python"]
@@ -312,8 +313,8 @@ def _forget(cwd: str) -> _Repl | None:
 
 
 def _status(cwd: str, repl: _Repl | None) -> dict:
-    """The lifecycle view every language answers: a key appears only where it
-    MEANS something, so a REPL that is down has no pid and no command."""
+    """The lifecycle view that every language answers. A key appears only where
+    it MEANS something, so a REPL that is down has no pid and no command."""
     answer = {"result": "status", "cwd": cwd, "status": "up" if repl else "down"}
     if repl:
         answer["running"] = True
@@ -337,9 +338,9 @@ def status(options=None) -> dict:
 def start(options=None) -> dict:
     """Start this worker's Python REPL for `cwd`, or reuse the live one.
 
-    A live REPL is NEVER silently replaced: its globals ARE the session's work,
-    so a second start answers `already-running`. A start succeeds only after the
-    child answers its protocol ping; a failed child never masquerades as a
+    A live REPL is NEVER silently replaced: its globals ARE the session's work.
+    So a second start answers `already-running`. A start succeeds only after the
+    child answers its protocol ping. A failed child is never reported as a
     usable REPL.
     """
     options = options or {}
@@ -417,9 +418,10 @@ def stop(options=None) -> dict:
 
 def evaluate(options) -> dict:
     """Evaluate `code` in this worker's REPL for `cwd`, with globals persistent
-    across calls. Answers `{ok, out, err, value, data, type, exc}` — `value` is
-    the last expression's repr, `data` its JSON-safe structured view, `type` the
-    class name — plus the `code` that ran, which the REPL op-card shows."""
+    across calls. Answers `{ok, out, err, value, data, type, exc}` plus the
+    `code` that ran, which the REPL op-card shows. `value` is the repr of the
+    last expression, and `data` is its JSON-safe structured view. `type` is the
+    class name."""
     options = {"code": options} if isinstance(options, str) else (options or {})
     code = options.get("code")
     if code is None:

@@ -1,9 +1,10 @@
 """Running the project's tests with pytest.
 
-pytest runs under the project's own interpreter — uv, Poetry, a `.venv` or
-`python3`, chosen the same way the REPL chooses one — so the tests import the
-project's dependencies and not this extension's. Counts and failures are read
-from the JUnit XML pytest writes, never scraped from its terminal output.
+pytest runs under the project's own interpreter: uv, Poetry, a `.venv` or
+`python3`. It is chosen the same way the REPL chooses one. So the tests import
+the project's dependencies, not the dependencies of this extension. Counts and
+failures come from the JUnit XML that pytest writes, never from its terminal
+output.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
     """Run pytest in `root` and read its JUnit report.
 
     Args:
-        paths: Test files or directories; pytest's own discovery when empty.
+        paths: Test files or directories. Empty means pytest's own discovery.
         root: Project directory to run in.
         keyword: Value for pytest's `-k` selection, or an empty string.
         timeout_s: Seconds before the run is abandoned.
@@ -69,8 +70,9 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
 def _test_name(case):
     """A case's name under its classes, nested names joined with ' › '.
 
-    pytest spells the classname as the dotted module path, then any classes, so
-    with the file known, what follows the module is the chain of classes.
+    pytest writes the classname as the dotted module path, followed by any
+    classes. When the file is known, the part after the module is the chain of
+    classes.
     """
     name = case.get("name") or ""
     classname = case.get("classname") or ""

@@ -1,11 +1,10 @@
 """The caches a confined Python run shares with the person's own tools.
 
-A jailed child may write to the workspace it was given and to Vis' own state
-directory, and to nothing else. uv, Poetry and pip keep their downloads and
-their managed interpreters outside both, so a confined run would re-download
-everything into a directory it may not even create. These are the exact
-directories the extension grants on the call that starts a run; the jail
-refuses the rest, unchanged.
+A jailed child can write only to its workspace and to Vis' own state directory.
+uv, Poetry and pip keep their downloads and managed interpreters outside both. A
+confined run would download everything again, into a directory that it may not
+be allowed to create. These are the exact directories that the extension grants
+on the call that starts a run. The jail still refuses everything else.
 """
 
 from __future__ import annotations

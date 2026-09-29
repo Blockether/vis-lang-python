@@ -1,8 +1,8 @@
 """The Python tools this extension exports.
 
 Ordinary Python: every method takes plain arguments and returns a contract
-result from `vis_lang_interface`, so the same calls work in a script, in a test
-and from Vis.
+result from `vis_lang_interface`. The same calls work in a script, in a test and
+from Vis.
 """
 
 from __future__ import annotations
@@ -48,8 +48,9 @@ def _root(cwd, paths=(), workspace_root=Path.cwd):
 def _in_root(root, paths):
     """`paths` as the caller means them: a relative name belongs to `root`.
 
-    ruff runs in `root`, so it already reads relative names that way; the files
-    are also read and rewritten here, where the process directory is Vis' own.
+    ruff runs in `root`, so it already reads relative names that way. This
+    process also reads and rewrites the files, but its working directory belongs
+    to Vis.
     """
     return tuple(
         str(one) if Path(one).is_absolute() else str(Path(root) / one) for one in paths
@@ -88,7 +89,7 @@ class PythonTools:
     """Format, lint and test Python, and evaluate in a project REPL."""
 
     def __init__(self, *, workspace_root=Path.cwd):
-        """Keep a live root provider; hosted tools receive the SDK function."""
+        """Keep a live root provider. Hosted tools receive the SDK function."""
         self._workspace_root = workspace_root
 
     def _absolute(self, path):
@@ -131,11 +132,11 @@ class PythonTools:
         """Lint Python with ruff and report every finding it located.
 
         Findings keep ruff's own rule codes. Syntax errors and undefined names
-        are reported as errors, every other rule as a warning. With source, that
-        text is linted under the project's settings and its findings are
-        reported against `<stdin>`; nothing is written, so is_fixed needs paths.
-        Raises ToolMissing when no ruff is installed and ValueError when neither
-        source nor paths are given.
+        are reported as errors, and every other rule as a warning. With source,
+        that text is linted under the project's settings, and its findings are
+        reported against `<stdin>`. Nothing is written then, so is_fixed needs
+        paths. Raises ToolMissing when no ruff is installed, and ValueError when
+        neither source nor paths are given.
         """
         root = self._root(cwd, tuple(paths))
         if source:
@@ -213,9 +214,10 @@ class PythonTools:
         """Evaluate code in the live interpreter, keeping globals between calls.
 
         The value of a trailing expression comes back as its repr, laid out by
-        pprint when it is long, with anything the code printed and the code as
-        ruff formats it. Start the REPL first: evaluating without one raises
-        ReplError, as does an evaluation that outlives timeout_ms.
+        pprint when it is long. The result also carries anything the code
+        printed, and the code as ruff formats it. Start the REPL first.
+        Evaluating without one raises ReplError, and so does an evaluation that
+        takes longer than timeout_ms.
         """
         directory = str(self._absolute(cwd))
         started = time.monotonic()
