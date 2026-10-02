@@ -2,13 +2,9 @@
 
 Python only: ruff, pytest and a managed interpreter. No JVM, no parser of our own, no tree-sitter.
 
-- `src/vis_lang_python/` is ordinary Python; `extension.py` is the only file that mentions Vis.
-- Results are the contract types from `vis-lang-interface`. Do not invent a second result shape;
-  extend the contract there and bump both versions together.
-- Run the project's own tools: its ruff, its pytest, its interpreter. Falling back to the bundled
-  ruff is fine; silently using this extension's interpreter for a project's tests is not.
-- Every exported method owns an explicit Activity presentation with a capitalized English label.
-  Cover success, failure and empty states in tests.
-- `repl.py` owns one child process per project directory. Closing its stdin ends it; never leave
-  an interpreter behind, and never replace a live REPL, because its globals are the user's work.
-- Formatting and lint are ruff. Tests: `vis-agent python -m pytest tests -q`.
+- `src/vis_lang_python/` is ordinary Python. Only `extension.py` mentions Vis.
+- Return the contract types from `vis-lang-interface`. Do not make a second result shape: extend the contract there and bump both versions together.
+- Run the project's own tools: its ruff, its pytest and its interpreter. A fallback to the bundled ruff is fine. Never run a project's tests silently with this extension's interpreter.
+- Give every exported method an explicit Activity presentation with a capitalized English label. Test the success, failure and empty states.
+- `repl.py` owns one child process for each project directory; closing its stdin ends it. Never leave an interpreter behind. Never replace a live REPL, because its globals are the user's work.
+- Format and lint with ruff. Run tests with `vis-agent python -m pytest tests -q`.
