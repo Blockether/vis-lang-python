@@ -239,6 +239,26 @@ def test_an_older_host_records_lint_and_test_runs_as_reads(monkeypatch):
     assert tags["repl_eval"] == "mutation"
 
 
+def test_syntax_checks_are_private_hooks(monkeypatch):
+    registered = []
+    monkeypatch.setattr(vis, "register_extension", registered.append)
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / "extension.py"))
+    extension = registered[0]
+    assert [(tuple(hook.ops), hook.phase) for hook in extension.op_hooks] == [
+        (("patch",), "before"),
+        (("python_execution",), "before"),
+        (("patch", "python_execution"), "after"),
+    ]
+    members = extension.symbols[0].contract["members"]
+    assert "py.check_syntax" not in {member["name"] for member in members}
+    assert not hasattr(extension.symbols[0].fn, "check_syntax")
+    assert "check_syntax" not in extension.prompt
+    guard = extension.ctx.__self__
+    assert guard.key == "python_syntax_errors"
+    assert guard.covers("src/a.py") and guard.covers("src/a.pyi")
+    assert not guard.covers("src/a.clj")
+
+
 def test_an_evaluation_answers_its_code_as_ruff_formats_it(tmp_path, monkeypatch):
     monkeypatch.setattr(tools.repl, "evaluate", lambda request: {"value": "3"})
     monkeypatch.setattr(

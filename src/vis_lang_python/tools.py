@@ -7,21 +7,25 @@ from Vis.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Annotated
 
 from vis_lang_interface import (
+    Diagnostic,
     FormatResult,
     LintResult,
     ReplResult,
     ReplSession,
+    SyntaxResult,
     TestResult,
+    process,
     project_root,
     source_files,
 )
 
-from vis_lang_python import pytest_tool, repl, ruff_tool
+from vis_lang_python import caches, pytest_tool, repl, ruff_tool
 
 MARKERS = (
     "pyproject.toml",
@@ -31,6 +35,20 @@ MARKERS = (
     "requirements.txt",
     ".git",
 )
+
+SYNTAX_SUFFIXES = (".py", ".pyi")
+_CHECK_TIMEOUT_S = 10.0
+_SYNTAX_DRIVER = """import json, sys
+sources = json.load(sys.stdin)
+problems = []
+for path, text in sorted(sources.items()):
+    try:
+        compile(text, path, "exec", dont_inherit=True)
+    except SyntaxError as error:
+        problems.append({"path": path, "line": error.lineno or 0,
+                         "column": error.offset or 0, "message": error.msg})
+print(json.dumps(problems))
+"""
 
 
 def _absolute(path, workspace_root=Path.cwd):
@@ -43,6 +61,43 @@ def _root(cwd, paths=(), workspace_root=Path.cwd):
     """The nearest Python project in the working copy chosen for this call."""
     start = cwd or (paths[0] if paths else ".")
     return str(project_root(_absolute(start, workspace_root), MARKERS))
+
+
+def _check_syntax(sources, root):
+    """Compile edit-hook sources with each project's interpreter, without execution.
+
+    This private callback belongs to `SyntaxGuard`, not the exported tool object.
+    Interpreter failures and timeouts propagate so the guard can log and back off.
+    Compilation creates no bytecode files and never changes a live REPL's globals.
+    """
+    projects = {}
+    for path, text in dict(sources).items():
+        directory = _root(str(_absolute(path, lambda: root).parent))
+        projects.setdefault(directory, {})[str(path)] = str(text)
+    diagnostics = []
+    for directory, texts in projects.items():
+        done = process.run(
+            [*repl.detect_command(directory), "-c", _SYNTAX_DRIVER],
+            cwd=directory,
+            stdin=json.dumps(texts),
+            timeout_s=_CHECK_TIMEOUT_S,
+            read_write=caches.granted_paths(),
+        )
+        if not done.is_ok:
+            raise RuntimeError(f"Python syntax check failed: {done.err or done.out}")
+        diagnostics.extend(
+            Diagnostic(
+                problem["path"],
+                problem["line"],
+                problem["column"],
+                "error",
+                problem["message"],
+            )
+            for problem in json.loads(done.out)
+        )
+    return SyntaxResult.of(
+        "python", sorted(diagnostics, key=lambda row: row.path), files=len(sources)
+    )
 
 
 def _in_root(root, paths):

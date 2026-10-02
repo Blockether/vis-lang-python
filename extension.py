@@ -2,8 +2,9 @@
 
 import blockether.vis.extension as vis
 from vis_lang_interface import presentation, prompt
+from vis_lang_interface.syntax import SyntaxGuard
 
-from vis_lang_python.tools import PythonTools
+from vis_lang_python.tools import SYNTAX_SUFFIXES, PythonTools, _check_syntax
 
 
 def _bind(name, label, build, *, tag="observation", show_start=True, describe=None):
@@ -97,8 +98,14 @@ PROMPT = prompt.routing(
         " block does not; `py.repl_eval` needs that interpreter already started.",
         "`py.run_tests` runs pytest under the same interpreter and needs no REPL;"
         " `py.format_code` and `py.lint_code` are ruff.",
+        "A `patch` that would leave a parseable Python file unparseable is refused"
+        " and writes nothing. A file that a Python block left unparseable stays in"
+        " `python_syntax_errors` in the session context until it parses again.",
     ),
 )
+
+GUARD = SyntaxGuard("python", SYNTAX_SUFFIXES, _check_syntax)
+
 
 vis.register_extension(
     vis.Extension(
@@ -108,5 +115,7 @@ vis.register_extension(
         alias="py",
         symbols=[vis.Symbol(PythonTools(workspace_root=vis.workspace_root), name="py")],
         prompt=PROMPT,
+        op_hooks=GUARD.op_hooks(),
+        ctx=GUARD.ctx,
     )
 )
