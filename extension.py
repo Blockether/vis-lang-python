@@ -93,14 +93,14 @@ PROMPT = prompt.routing(
         "repl_stop",
     ),
     notes=(
-        "`py.repl_start` uses the project's own interpreter — uv, Poetry, a local virtualenv or"
-        " python3, in that order — so the REPL sees the project's packages, which the sandbox"
-        " block does not; `py.repl_eval` needs that interpreter already started.",
-        "`py.run_tests` runs pytest under the same interpreter and needs no REPL;"
-        " `py.format_code` and `py.lint_code` are ruff.",
-        "A `patch` that would leave a parseable Python file unparseable is refused"
-        " and writes nothing. A file that a Python block left unparseable stays in"
-        " `python_syntax_errors` in the session context until it parses again.",
+        "`py.repl_start` uses the project's own interpreter (uv, Poetry, a local virtualenv or"
+        " python3, in that order), so the REPL sees the project's packages; the sandbox block does"
+        " not. `py.repl_eval` needs that interpreter started first.",
+        "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
+        " and `py.lint_code` run ruff.",
+        "`patch` refuses an edit that makes a parseable Python file unparseable; it writes nothing."
+        " If a Python block leaves a file unparseable, the file stays in `python_syntax_errors` in"
+        " the session context until it parses again.",
     ),
 )
 
@@ -111,7 +111,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.6.1",
+        version="1.6.2",
         alias="py",
         symbols=[vis.Symbol(PythonTools(workspace_root=vis.workspace_root), name="py")],
         prompt=PROMPT,
