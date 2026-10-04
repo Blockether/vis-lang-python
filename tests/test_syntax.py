@@ -169,22 +169,8 @@ def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
     assert context["python_syntax_repairs"]
 
 
-@pytest.mark.parametrize(
-    "source, expected",
-    [
-        ("print(42", "print(42)"),
-        ("await function(", "await function()"),
-        ("await function()", None),
-        ("if True\n    pass", None),
-    ],
-)
-def test_registered_hook_repairs_block_before_execution(extension, source, expected):
-    decision = extension.op_hooks[1].fn(
-        {"op": "python_execution", "args": [{"code": source}]}
-    )
-    if expected is None:
-        assert decision is None
-    else:
-        assert decision["marker"] == "repair"
-        assert decision["source"] == expected
-        assert decision["notes"]
+@pytest.mark.parametrize("source", ["print(42", "await function(", "await function()"])
+def test_registered_hook_leaves_block_repair_to_the_host(extension, source):
+    call = {"op": "python_execution", "args": [{"code": source}], "result": {}}
+    assert extension.op_hooks[1].fn(call) is None
+    assert call["args"] == [{"code": source}]
