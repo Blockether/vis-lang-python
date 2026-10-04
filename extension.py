@@ -1,9 +1,12 @@
 """Vis entrypoint. The tools themselves live in vis_lang_python."""
 
+import ast
+
 import blockether.vis.extension as vis
 from vis_lang_interface import presentation, prompt
 from vis_lang_interface.syntax import SyntaxGuard
 
+from vis_lang_python.repair import repair_source
 from vis_lang_python.tools import SYNTAX_SUFFIXES, PythonTools, _check_syntax
 
 
@@ -98,24 +101,69 @@ PROMPT = prompt.routing(
         " not. `py.repl_eval` needs that interpreter started first.",
         "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
         " and `py.lint_code` run ruff.",
-        "`patch` refuses an edit that makes a parseable Python file unparseable; it writes nothing."
-        " If a Python block leaves a file unparseable, the file stays in `python_syntax_errors` in"
-        " the session context until it parses again.",
+        "Edit hooks repair structural mistakes in Python locally and validate the result without execution."
+        " Before a patch writes, its repair stays in the changed lines. Unrepairable breaking patches write nothing.",
+        "Python blocks are repaired before execution, including top-level await. Changed files can be repaired"
+        " after the block. A block is not transactional. Repairs and unresolved errors appear in"
+        " `python_syntax_repairs` and `python_syntax_errors` in the session context.",
     ),
 )
 
-GUARD = SyntaxGuard("python", SYNTAX_SUFFIXES, _check_syntax)
+GUARD = SyntaxGuard("python", SYNTAX_SUFFIXES, _check_syntax, repair=repair_source)
+
+
+def _block_parses(source):
+    """Validate a sandbox block, including top-level await, without execution."""
+    try:
+        tree = ast.parse(source, filename="<python_execution>")
+        compile(
+            tree,
+            "<python_execution>",
+            "exec",
+            flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
+            dont_inherit=True,
+        )
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+def _before_block(call):
+    """Record the file baseline, then repair the block before it can execute."""
+    GUARD.before_block(call)
+    args = call.get("args")
+    if (
+        not isinstance(args, (list, tuple))
+        or len(args) != 1
+        or not isinstance(args[0], dict)
+    ):
+        return None
+    source = args[0].get("code")
+    if not isinstance(source, str):
+        return None
+    candidate = repair_source(source, parses_clean=_block_parses)
+    if candidate is not None:
+        return {
+            "marker": "repair",
+            "source": candidate.source,
+            "notes": list(candidate.notes),
+        }
+    return None
 
 
 vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.6.2",
+        version="1.7.0",
         alias="py",
         symbols=[vis.Symbol(PythonTools(workspace_root=vis.workspace_root), name="py")],
         prompt=PROMPT,
-        op_hooks=GUARD.op_hooks(),
+        op_hooks=[
+            vis.OpHook(["patch"], GUARD.before_patch),
+            vis.OpHook(["python_execution"], _before_block),
+            vis.OpHook(["patch", "python_execution"], GUARD.after_edit, phase="after"),
+        ],
         ctx=GUARD.ctx,
     )
 )

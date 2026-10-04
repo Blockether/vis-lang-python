@@ -29,16 +29,27 @@ from the project's virtualenv, then `PATH`, then the copy installed with this ex
 
 ## Keep files parseable
 
-Syntax checks run automatically through edit hooks, not through a public tool.
-The extension compiles changed `.py` and `.pyi` files with each project's interpreter.
-It does not execute the code, write bytecode files or change your REPL's globals.
+Edit hooks repair structural mistakes and validate syntax locally in Python.
+They use `ast.parse` and compile the syntax tree without executing it.
+They do not start a project interpreter, write bytecode files or change REPL globals.
+Project lint and tests still use your project's tools and interpreter.
 
-- A `patch` that would make a parseable file unparseable is refused. Nothing is written.
-- After each `python_execution` block, the guard checks changed files again.
-  Errors appear in `session["python_syntax_errors"]` until the files parse again.
+- Before a patch writes, the guard tries to repair invalid source within the changed lines.
+  The host writes the validated result once and reports the corrections.
+  If repair fails, a patch that breaks a parseable file writes nothing.
+- Before a Python block executes, its hook can repair structural mistakes.
+  Validation accepts top-level `await` and reports the source that will execute.
+  Source that already parses is never repaired.
+- After a Python block, the guard can repair changed `.py` and `.pyi` files.
+  These repairs happen after the original writes. The block is not transactional.
+  Repairs include notes and diffs in `session["python_syntax_repairs"]`.
+  Unresolved errors remain in `session["python_syntax_errors"]` until the files parse again.
 
 The shared [syntax guard](https://github.com/Blockether/vis-lang-interface#keep-source-files-parseable)
-selects matching files. If the interpreter is unavailable, the guard allows the edit and logs the failure.
+selects matching files and prevents a repair from overwriting a detected concurrent change.
+Repairs require a Vis host with support for repair decisions.
+If the parser is unavailable, the guard allows the operation and logs the failure.
+It never accepts a repair without successful validation.
 
 ## Requirements
 
@@ -52,3 +63,5 @@ vis-agent python -m pytest tests -q
 
 Results follow the contract in
 [vis-lang-interface](https://github.com/Blockether/vis-lang-interface).
+The repair port and its regression corpus come from `clj-parinferish` under the MIT License.
+See [NOTICE](NOTICE) for the required license notice.

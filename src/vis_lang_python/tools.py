@@ -7,7 +7,7 @@ from Vis.
 
 from __future__ import annotations
 
-import json
+import ast
 import time
 from pathlib import Path
 from typing import Annotated
@@ -20,12 +20,11 @@ from vis_lang_interface import (
     ReplSession,
     SyntaxResult,
     TestResult,
-    process,
     project_root,
     source_files,
 )
 
-from vis_lang_python import caches, pytest_tool, repl, ruff_tool
+from vis_lang_python import pytest_tool, repl, ruff_tool
 
 MARKERS = (
     "pyproject.toml",
@@ -37,18 +36,6 @@ MARKERS = (
 )
 
 SYNTAX_SUFFIXES = (".py", ".pyi")
-_CHECK_TIMEOUT_S = 10.0
-_SYNTAX_DRIVER = """import json, sys
-sources = json.load(sys.stdin)
-problems = []
-for path, text in sorted(sources.items()):
-    try:
-        compile(text, path, "exec", dont_inherit=True)
-    except SyntaxError as error:
-        problems.append({"path": path, "line": error.lineno or 0,
-                         "column": error.offset or 0, "message": error.msg})
-print(json.dumps(problems))
-"""
 
 
 def _absolute(path, workspace_root=Path.cwd):
@@ -64,40 +51,23 @@ def _root(cwd, paths=(), workspace_root=Path.cwd):
 
 
 def _check_syntax(sources, root):
-    """Compile edit-hook sources with each project's interpreter, without execution.
+    """Check source locally with Python's parser and compiler, without execution.
 
-    This private callback belongs to `SyntaxGuard`, not the exported tool object.
-    Interpreter failures and timeouts propagate so the guard can log and back off.
-    Compilation creates no bytecode files and never changes a live REPL's globals.
+    The extension's interpreter decides this fast edit check. Project lint and
+    tests still run with the project's own tools. No subprocess is started.
     """
-    projects = {}
-    for path, text in dict(sources).items():
-        directory = _root(str(_absolute(path, lambda: root).parent))
-        projects.setdefault(directory, {})[str(path)] = str(text)
     diagnostics = []
-    for directory, texts in projects.items():
-        done = process.run(
-            [*repl.detect_command(directory), "-c", _SYNTAX_DRIVER],
-            cwd=directory,
-            stdin=json.dumps(texts),
-            timeout_s=_CHECK_TIMEOUT_S,
-            read_write=caches.granted_paths(),
-        )
-        if not done.is_ok:
-            raise RuntimeError(f"Python syntax check failed: {done.err or done.out}")
-        diagnostics.extend(
-            Diagnostic(
-                problem["path"],
-                problem["line"],
-                problem["column"],
-                "error",
-                problem["message"],
+    for path, text in sorted(sources.items()):
+        try:
+            tree = ast.parse(text, filename=str(path))
+            compile(tree, str(path), "exec", dont_inherit=True)
+        except SyntaxError as error:
+            diagnostics.append(
+                Diagnostic(
+                    str(path), error.lineno or 0, error.offset or 0, "error", error.msg
+                )
             )
-            for problem in json.loads(done.out)
-        )
-    return SyntaxResult.of(
-        "python", sorted(diagnostics, key=lambda row: row.path), files=len(sources)
-    )
+    return SyntaxResult.of("python", diagnostics, files=len(sources))
 
 
 def _in_root(root, paths):

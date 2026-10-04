@@ -1,20 +1,17 @@
-"""Private edit hooks use the project's compiler without executing source."""
+"""Private edit hooks use local Python syntax checks without executing source."""
 
-import json
 import runpy
-import sys
 from pathlib import Path
 
 import blockether.vis.extension as vis
 import pytest
-from vis_lang_interface import ToolRun, ToolTimeout
+from vis_lang_interface import process
 
 from vis_lang_python import tools
 
 
 @pytest.fixture
-def compiler(monkeypatch):
-    monkeypatch.setattr(tools.repl, "detect_command", lambda root: [sys.executable])
+def compiler():
     return tools._check_syntax
 
 
@@ -61,34 +58,20 @@ def test_empty_sources_do_not_start_an_interpreter(monkeypatch, tmp_path):
     def unexpected(*args, **kwargs):
         pytest.fail("an empty check must not start a process")
 
-    monkeypatch.setattr(tools.process, "run", unexpected)
+    monkeypatch.setattr(process, "run", unexpected)
     result = tools._check_syntax({}, tmp_path)
     assert result.is_clean and result.files == 0
 
 
-def test_each_project_uses_its_own_interpreter(monkeypatch, tmp_path):
-    roots = [tmp_path / name for name in ("first", "second")]
-    for root in roots:
-        root.mkdir()
-        (root / "pyproject.toml").write_text("[project]\nname = 'example'\n")
-    monkeypatch.setattr(tools.repl, "detect_command", lambda root: [f"{root}/python"])
-    calls = []
+def test_sources_are_checked_locally_without_starting_a_process(monkeypatch, tmp_path):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Syntax checks must not start a project interpreter")
 
-    def run(command, **options):
-        calls.append((command, options))
-        return ToolRun(tuple(command), 0, "[]", "", 0)
-
-    monkeypatch.setattr(tools.process, "run", run)
+    monkeypatch.setattr(process, "run", unexpected)
+    monkeypatch.setattr(tools.repl, "detect_command", unexpected)
     sources = {"first/a.py": "pass", "second/b.pyi": "value: int"}
     result = tools._check_syntax(sources, tmp_path)
     assert result.is_clean and result.files == 2
-    for (command, options), root, (path, text) in zip(calls, roots, sources.items()):
-        assert command == [f"{root}/python", "-c", tools._SYNTAX_DRIVER]
-        assert options["cwd"] == str(root)
-        assert json.loads(options["stdin"]) == {path: text}
-        assert options["timeout_s"] == tools._CHECK_TIMEOUT_S
-        assert options["read_write"] == tools.caches.granted_paths()
-    assert len(calls) == 2
 
 
 @pytest.fixture
@@ -121,7 +104,7 @@ def test_registered_hooks_report_python_writes_until_repaired(extension, tmp_pat
     before, after = extension.op_hooks[1:]
     call = {"op": "python_execution", "args": [], "result": {}}
     before.fn(call)
-    path.write_text("value: [\n")
+    path.write_text("return 1\n")
     after.fn(call)
     report = extension.ctx()["python_syntax_errors"]
     assert len(report) == 1 and report[0].startswith("example.pyi:1:")
@@ -131,19 +114,16 @@ def test_registered_hooks_report_python_writes_until_repaired(extension, tmp_pat
     assert extension.ctx() == {}
 
 
-@pytest.mark.parametrize("failure", ["exit", "timeout", "invalid-json"])
-def test_toolchain_failures_reach_the_guard_without_a_false_syntax_verdict(
-    extension, monkeypatch, tmp_path, failure
+def test_parser_failures_reach_the_guard_without_a_false_verdict(
+    extension, monkeypatch, tmp_path
 ):
-    def run(command, **options):
-        if failure == "timeout":
-            raise ToolTimeout("interpreter did not answer")
-        return ToolRun(tuple(command), 1 if failure == "exit" else 0, "bad", "", 0)
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Parser is unavailable")
 
-    monkeypatch.setattr(tools.process, "run", run)
+    monkeypatch.setattr(tools.ast, "parse", unavailable)
     path = tmp_path / "example.py"
     path.write_text("pass\n")
-    with pytest.raises((RuntimeError, ValueError)):
+    with pytest.raises(RuntimeError):
         tools._check_syntax({str(path): "value = (\n"}, tmp_path)
     assert (
         extension.op_hooks[0].fn(
@@ -152,3 +132,59 @@ def test_toolchain_failures_reach_the_guard_without_a_false_syntax_verdict(
         is None
     )
     assert extension.ctx() == {}
+
+
+def test_registered_hook_repairs_patch_before_any_write(extension, tmp_path):
+    path = tmp_path / "example.py"
+    before, after = "value = [1]\n", "value = [1\n"
+    path.write_text(before)
+    decision = extension.op_hooks[0].fn(
+        {
+            "op": "patch",
+            "preview": {
+                "path": str(path),
+                "before": before,
+                "after": after,
+                "spans": [[1, 1]],
+            },
+        }
+    )
+    assert decision["marker"] == "repair"
+    assert decision["source"] == before
+    assert decision["notes"]
+    assert path.read_text() == before
+
+
+def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
+    path = tmp_path / "example.py"
+    path.write_text("value = [1]\n")
+    before, after = extension.op_hooks[1:]
+    call = {"op": "python_execution", "args": [{"code": "pass"}], "result": {}}
+    before.fn(call)
+    path.write_text("value = [2\n")
+    after.fn(call)
+    assert path.read_text() == "value = [2]\n"
+    context = extension.ctx()
+    assert "python_syntax_errors" not in context
+    assert context["python_syntax_repairs"]
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("print(42", "print(42)"),
+        ("await function(", "await function()"),
+        ("await function()", None),
+        ("if True\n    pass", None),
+    ],
+)
+def test_registered_hook_repairs_block_before_execution(extension, source, expected):
+    decision = extension.op_hooks[1].fn(
+        {"op": "python_execution", "args": [{"code": source}]}
+    )
+    if expected is None:
+        assert decision is None
+    else:
+        assert decision["marker"] == "repair"
+        assert decision["source"] == expected
+        assert decision["notes"]
