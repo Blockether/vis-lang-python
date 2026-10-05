@@ -2,6 +2,7 @@
 
 import runpy
 from pathlib import Path
+from typing import Any, cast
 
 import blockether.vis.extension as vis
 import pytest
@@ -161,7 +162,8 @@ def test_draft_switch_updates_relative_format_tests_and_repl(tmp_path, monkeypat
 
     for root in roots:
         current["root"] = root
-        files, selected = language.format_code(["pkg/thing.py"], cwd=".")
+        # The stub above makes `format_code` answer with its own arguments.
+        files, selected = cast(Any, language.format_code(["pkg/thing.py"], cwd="."))
         assert files == ((root / "pkg" / "thing.py").resolve(),)
         assert selected == str(root.resolve())
         assert language.run_tests(cwd=".") == str(root.resolve())
@@ -292,7 +294,7 @@ def test_every_tool_owns_an_activity_and_an_evaluation_shows_its_code(monkeypatc
         label = getattr(tools.PythonTools, name).__vis_symbol_activity__.label
         assert label[:1].isupper() and "_" not in label, name
 
-    activity = tools.PythonTools.repl_eval.__vis_symbol_activity__
+    activity = getattr(tools.PythonTools.repl_eval, "__vis_symbol_activity__")
     running = activity.render(phase="start", args=(), kwargs={"code": "1 + 2"})
     assert (running.headline, running.summary) == ("Evaluate in Python REPL", "running")
     assert [

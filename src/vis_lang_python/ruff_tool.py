@@ -176,7 +176,7 @@ def check_source(source, root, name=""):
     return LintResult.of("python", diagnostics_of(done.out, root), 1)
 
 
-def diagnostics_of(report, root=""):
+def diagnostics_of(report, root="") -> tuple[Diagnostic, ...]:
     """Ruff's JSON report as contract diagnostics.
 
     Raises:

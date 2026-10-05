@@ -1,4 +1,4 @@
-"""Pyright standard checks for the sources that this extension ships."""
+"""Pyright standard checks for the sources and tests of this extension."""
 
 import json
 import os
@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGETS = (
     ROOT / "extension.py",
     ROOT / "src",
+    ROOT / "tests",
 )
 
 
@@ -22,7 +23,7 @@ def _where(item):
     return f"{os.path.relpath(item['file'], ROOT)}:{line}: {item['message']}"
 
 
-def test_sources_pass_pyright_standard(tmp_path):
+def test_sources_and_tests_pass_pyright_standard(tmp_path):
     # Regression, issues Blockether/vis#313 and Blockether/vis#315: a tag in a helper
     # parameter was a `str`, and `()` defaults did not match `list[str]`.
     config = tmp_path / "pyrightconfig.json"
