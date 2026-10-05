@@ -43,6 +43,10 @@ Project lint and tests still use your project's tools and interpreter.
   These repairs happen after the original writes. The block is not transactional.
   Repairs include notes and diffs in `session["python_syntax_repairs"]`.
   Unresolved errors remain in `session["python_syntax_errors"]` until the files parse again.
+- Before `repl_eval` runs code, the project's interpreter compiles all of it.
+  If the code does not parse, none of it runs, and the guard's repair is tried on the code.
+  When the interpreter accepts the repaired code, it runs, and the result lists each correction in `repairs`.
+  If no safe repair exists, the error gives the line, the column and the parser's message.
 
 The shared [syntax guard](https://github.com/Blockether/vis-lang-interface#keep-source-files-parseable)
 selects matching files and prevents a repair from overwriting a detected concurrent change.

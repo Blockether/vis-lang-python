@@ -84,28 +84,43 @@ def _safe(o, depth=0):
     return info
 
 
+def _compiled(code):
+    block = ast.parse(code, '<repl>', 'exec')
+    body = block.body
+    if body and isinstance(body[-1], ast.Expr):
+        pre = compile(ast.Module(body[:-1], []), '<repl>', 'exec')
+        return pre, compile(ast.Expression(body[-1].value), '<repl>', 'eval')
+    return compile(block, '<repl>', 'exec'), None
+
+
 def _run(code):
     out = io.StringIO()
     err = io.StringIO()
     value = None
     ok = True
     exc = None
+    syntax = None
     has_value = False
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            block = ast.parse(code, mode='exec')
-            body = block.body
-            if body and isinstance(body[-1], ast.Expr):
+            # Compile all of the code before any of it runs. Code that does not
+            # parse runs nothing, and the answer says where it stops.
+            try:
+                pre, last = _compiled(code)
+            except SyntaxError as e:
+                syntax = {'line': e.lineno or 0, 'column': e.offset or 0,
+                          'message': e.msg}
+                raise
+            exec(pre, _G)
+            if last is not None:
                 has_value = True
-                pre = ast.Module(body[:-1], [])
-                last = ast.Expression(body[-1].value)
-                exec(compile(pre, '<repl>', 'exec'), _G)
-                value = eval(compile(last, '<repl>', 'eval'), _G)
-            else:
-                exec(compile(block, '<repl>', 'exec'), _G)
-    except BaseException:
+                value = eval(last, _G)
+    except BaseException as e:
         ok = False
-        exc = traceback.format_exc()
+        if syntax is None:
+            exc = traceback.format_exc()
+        else:
+            exc = ''.join(traceback.format_exception_only(type(e), e))
     has_v = has_value and value is not None
     try:
         data = _safe(value) if has_v else None
@@ -117,7 +132,8 @@ def _run(code):
             'value': (_repr(value) if has_v else None),
             'data': data,
             'type': (type(value).__name__ if has_v else None),
-            'exc': exc}
+            'exc': exc,
+            'syntax': syntax}
 
 
 def _main():

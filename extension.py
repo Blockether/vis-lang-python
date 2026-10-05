@@ -105,6 +105,9 @@ PROMPT = prompt.routing(
         "`py.repl_start` uses the project's own interpreter (uv, Poetry, a local virtualenv or"
         " python3, in that order), so the REPL sees the project's packages; the sandbox block does"
         " not. `py.repl_eval` needs that interpreter started first.",
+        "`py.repl_eval` runs nothing from code that does not parse. It evaluates a safe repair, such"
+        " as a missing closer, and lists it in `repairs`. With no safe repair, it reports where the"
+        " code stops parsing.",
         "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
         " and `py.lint_code` run ruff.",
         "Edit hooks repair structural mistakes in Python files locally and validate the result without"

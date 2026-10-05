@@ -41,6 +41,40 @@ def test_output_and_errors_come_back(project):
     assert "ZeroDivisionError" in failed.error
 
 
+def test_a_missing_closer_is_put_back_before_the_code_runs(project):
+    # An agent that loses count of closing brackets must not fight the parser.
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    answer = tools.repl_eval("values = [1, 2, 3\nsum(values)", cwd=cwd)
+    assert (answer.value, answer.error) == ("6", "")
+    assert answer.repairs == (
+        "line 1: added ']' at column 18 to close '[' from line 1",
+    )
+    assert answer.code == "values = [1, 2, 3]\nsum(values)"
+
+
+def test_code_that_does_not_parse_runs_none_of_its_statements(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    refused = tools.repl_eval("ran = True\nx = = 2", cwd=cwd)
+    first, second, *rest = refused.error.splitlines()
+    assert first.startswith("Line 2, column ")
+    assert first.endswith(". The code was not evaluated.")
+    assert second == "No safe repair exists. Fix the syntax, then evaluate again."
+    assert "SyntaxError" in rest[-1]
+    assert refused.repairs == ()
+    assert "NameError" in tools.repl_eval("ran", cwd=cwd).error
+
+
+def test_a_compile_error_after_a_statement_runs_nothing(project):
+    # The parser accepts a top-level `yield`; only the compiler refuses it.
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    refused = tools.repl_eval("ran = True\n(yield 1)", cwd=cwd)
+    assert "'yield' outside function. The code was not evaluated." in refused.error
+    assert "NameError" in tools.repl_eval("ran", cwd=cwd).error
+
+
 def test_a_second_start_keeps_the_live_repl(project):
     tools, cwd = project
     first = tools.repl_start(cwd=cwd)

@@ -26,6 +26,7 @@ from vis_lang_interface import (
 )
 
 from vis_lang_python import pytest_tool, repl, ruff_tool
+from vis_lang_python.repair import repair_source
 
 MARKERS = (
     "pyproject.toml",
@@ -109,6 +110,20 @@ def _pretty(code, root):
         return ruff_tool.format_source(code, root).source.rstrip()
     except Exception:
         return code.rstrip()
+
+
+def _parses(text):
+    """True when the local parser and compiler accept `text`, as in the edit check."""
+    return _check_syntax({"<repl>": text}, "").is_clean
+
+
+def _unparsed(syntax, exc):
+    """The error for code that did not parse: where it stops, and what to do next."""
+    return (
+        f"Line {syntax.get('line')}, column {syntax.get('column')}: "
+        f"{syntax.get('message')}. The code was not evaluated.\n"
+        "No safe repair exists. Fix the syntax, then evaluate again.\n"
+    ) + (exc or "")
 
 
 class PythonTools:
@@ -243,13 +258,23 @@ class PythonTools:
         pprint when it is long. The result also carries anything the code
         printed, and the code as ruff formats it. Start the REPL first.
         Evaluating without one raises ReplError, and so does an evaluation that
-        takes longer than timeout_ms.
+        takes longer than timeout_ms. Code that does not parse runs nothing. A
+        safe repair, such as a missing closer, is evaluated instead and listed
+        in `repairs`. Without one, the error says where the code stops parsing.
         """
         directory = str(self._absolute(cwd))
         started = time.monotonic()
-        answer = repl.evaluate(
-            {"code": code, "cwd": directory, "timeout_ms": timeout_ms}
-        )
+        request = {"code": code, "cwd": directory, "timeout_ms": timeout_ms}
+        answer = repl.evaluate(request)
+        repairs = ()
+        syntax = answer.get("syntax")
+        repaired = syntax and repair_source(code, parses_clean=_parses)
+        if repaired:
+            retry = repl.evaluate(dict(request, code=repaired.source))
+            if not retry.get("syntax"):
+                code, answer, repairs = repaired.source, retry, repaired.notes
+        if syntax and not repairs:
+            answer = dict(answer, exc=_unparsed(syntax, answer.get("exc")))
         return ReplResult(
             "python",
             repl.abbreviate_home(str(Path(directory).expanduser().resolve())),
@@ -259,4 +284,5 @@ class PythonTools:
             round((time.monotonic() - started) * 1000),
             True,
             code=_pretty(code, directory),
+            repairs=repairs,
         )
