@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
 
@@ -125,7 +126,7 @@ class PythonTools:
 
     def format_code(
         self,
-        paths: Annotated[list[str], "Files or directories to format."] = (),
+        paths: Annotated[Sequence[str], "Files or directories to format."] = (),
         *,
         source: Annotated[str, "Format this text instead of files."] = "",
         cwd: Annotated[str, "Project directory; inferred from paths when empty."] = "",
@@ -148,7 +149,7 @@ class PythonTools:
 
     def lint_code(
         self,
-        paths: Annotated[list[str], "Files or directories to lint."] = (),
+        paths: Annotated[Sequence[str], "Files or directories to lint."] = (),
         *,
         source: Annotated[str, "Lint this text instead of files."] = "",
         cwd: Annotated[str, "Project directory; inferred from paths when empty."] = "",
@@ -176,7 +177,7 @@ class PythonTools:
     def run_tests(
         self,
         paths: Annotated[
-            list[str], "Test files or directories; pytest discovers when empty."
+            Sequence[str], "Test files or directories; pytest discovers when empty."
         ] = (),
         *,
         cwd: Annotated[str, "Project directory; inferred from paths when empty."] = "",

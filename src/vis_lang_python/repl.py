@@ -315,7 +315,11 @@ def _forget(cwd: str) -> _Repl | None:
 def _status(cwd: str, repl: _Repl | None) -> dict:
     """The lifecycle view that every language answers. A key appears only where
     it MEANS something, so a REPL that is down has no pid and no command."""
-    answer = {"result": "status", "cwd": cwd, "status": "up" if repl else "down"}
+    answer: dict[str, object] = {
+        "result": "status",
+        "cwd": cwd,
+        "status": "up" if repl else "down",
+    }
     if repl:
         answer["running"] = True
         answer["pid"] = repl.pid

@@ -1,0 +1,54 @@
+"""Pyright standard checks for the sources that this extension ships."""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("pyright")
+
+ROOT = Path(__file__).resolve().parents[1]
+TARGETS = (
+    ROOT / "extension.py",
+    ROOT / "src",
+)
+
+
+def _where(item):
+    line = item["range"]["start"]["line"] + 1
+    return f"{os.path.relpath(item['file'], ROOT)}:{line}: {item['message']}"
+
+
+def test_sources_pass_pyright_standard(tmp_path):
+    # Regression, issues Blockether/vis#313 and Blockether/vis#315: a tag in a helper
+    # parameter was a `str`, and `()` defaults did not match `list[str]`.
+    config = tmp_path / "pyrightconfig.json"
+    config.write_text(
+        json.dumps(
+            {
+                "typeCheckingMode": "standard",
+                "pythonVersion": "3.11",
+                "extraPaths": [str(ROOT / "src")],
+            }
+        )
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "pyright",
+        "--project",
+        str(config),
+        "--pythonpath",
+        sys.executable,
+        "--warnings",
+        "--outputjson",
+        *(str(target) for target in TARGETS),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.stdout, result.stderr
+    found = [_where(item) for item in json.loads(result.stdout)["generalDiagnostics"]]
+    assert found == [], "\n".join(found)
+    assert result.returncode == 0, result.stderr
