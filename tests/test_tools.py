@@ -32,6 +32,34 @@ def test_linting_needs_python_files(tmp_path):
         tools.PythonTools().lint_code([str(tmp_path)])
 
 
+def test_one_bare_path_is_one_path_for_every_file_tool(tmp_path, monkeypatch):
+    # Regression for Blockether/vis#324: `lint_code("/src/app.py")` named one path
+    # for each character, and `/` made the lint walk the whole filesystem.
+    target = tmp_path / "app.py"
+    target.write_text("x = 1\n")
+    seen = {}
+
+    def remember(name):
+        def tool(paths, *args, **options):
+            seen[name] = tuple(paths)
+            return name
+
+        return tool
+
+    monkeypatch.setattr(tools.ruff_tool, "check_files", remember("lint"))
+    monkeypatch.setattr(tools.ruff_tool, "format_files", remember("format"))
+    monkeypatch.setattr(tools.pytest_tool, "run", remember("test"))
+    language = tools.PythonTools()
+    assert language.lint_code(str(target)) == "lint"
+    assert language.format_code(target) == "format"  # type: ignore[arg-type]
+    assert language.run_tests(str(target)) == "test"
+    assert seen == {
+        "lint": (target.resolve(),),
+        "format": (target.resolve(),),
+        "test": (str(target),),
+    }
+
+
 def test_source_text_is_linted_without_files(tmp_path, monkeypatch):
     # Regression: lint_code took only paths, so linting a snippet failed with
     # TypeError while format_code and the Clojure tools accept source text.

@@ -23,6 +23,7 @@ from vis_lang_interface import (
     TestResult,
     project_root,
     source_files,
+    string_list,
 )
 
 from vis_lang_python import pytest_tool, repl, ruff_tool
@@ -154,7 +155,8 @@ class PythonTools:
         them. Raises ToolMissing when no ruff is installed and ValueError when
         neither source nor paths are given.
         """
-        root = self._root(cwd, tuple(paths))
+        paths = string_list(paths)
+        root = self._root(cwd, paths)
         if source:
             return ruff_tool.format_source(source, root)
         files = source_files(_in_root(root, paths), ruff_tool.SUFFIXES)
@@ -179,7 +181,8 @@ class PythonTools:
         paths. Raises ToolMissing when no ruff is installed, and ValueError when
         neither source nor paths are given.
         """
-        root = self._root(cwd, tuple(paths))
+        paths = string_list(paths)
+        root = self._root(cwd, paths)
         if source:
             if is_fixed:
                 raise ValueError("is_fixed rewrites files; pass paths to apply fixes")
@@ -205,9 +208,10 @@ class PythonTools:
         ToolMissing when the project has no pytest and ToolTimeout when the run
         outlives timeout_s.
         """
+        paths = string_list(paths)
         return pytest_tool.run(
-            tuple(paths),
-            root=self._root(cwd, tuple(paths)),
+            paths,
+            root=self._root(cwd, paths),
             keyword=keyword,
             timeout_s=timeout_s,
         )
