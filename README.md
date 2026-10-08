@@ -27,6 +27,9 @@ Which interpreter runs your tests and REPL is decided per project, first match w
 (`uv.lock` or `[tool.uv]`), Poetry (`poetry.lock`), a local `.venv`, then `python3`. Ruff is taken
 from the project's virtualenv, then `PATH`, then the copy installed with this extension.
 
+The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
+reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.
+
 ## Keep files parseable
 
 Edit hooks repair structural mistakes and validate syntax locally in Python.

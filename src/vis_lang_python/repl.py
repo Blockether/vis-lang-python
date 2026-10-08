@@ -9,19 +9,27 @@ of scripts.
 
 There is one runtime per project directory. This extension owns it, and the
 workspace jail confines it like everything else that a language tool starts.
-Closing the channel that it reads ends it. So an extension that goes away never
-leaves an interpreter behind.
+The runtime holds its own channels open and runs under a shell id, so it
+outlives a sandbox restart: the next Python process attaches to it, with its
+globals. Only `stop` and the end of the session end it.
 """
 
 from __future__ import annotations
 
+import atexit
+import hashlib
+import itertools
+import json
 import os
+import secrets
+import shlex
 import shutil
 import threading
 import time
 from pathlib import Path
 
 from vis_lang_interface import RuntimeGone, runtime
+from vis_lang_interface.process import shell_call
 
 from vis_lang_python import caches
 
@@ -148,6 +156,8 @@ def _main():
             sys.stdout.flush()
             continue
         res = {'ok': True, 'pong': True} if req.get('op') == 'ping' else _run(req.get('code', ''))
+        if 'id' in req:
+            res['id'] = req['id']
         sys.stdout.write(json.dumps(res) + '\n')
         sys.stdout.flush()
 
@@ -158,11 +168,21 @@ _main()
 STDERR_TAIL_LINES = 40
 """How many of the child's last stderr lines a failed start hands back."""
 
+LOADER = (
+    "import os, sys; "
+    "p = os.path.join(os.environ['VIS_LANG_RENDEZVOUS'], 'driver.py'); "
+    "sys.argv = [p]; "
+    "exec(compile(open(p, encoding='utf-8').read(), p, 'exec'), "
+    "{'__name__': '__main__', '__file__': p})"
+)
+"""Runs the driver from the runtime's rendezvous. The command line stays the same
+for every start in one directory, so a later process finds the runtime by it."""
+
 PING_TIMEOUT_S = 5.0
 DEFAULT_EVAL_TIMEOUT_S = 30.0
 
 _REPLS: dict[str, _Repl] = {}
-_REPLS_LOCK = threading.Lock()
+_REPLS_LOCK = threading.RLock()
 
 
 def _text(value) -> str:
@@ -267,6 +287,13 @@ class _Repl:
         self.cmd = cmd
         self.env_fingerprint = dict(env_fingerprint or {})
         self.started_at = time.time()
+        # A kept interpreter can still hold answers to an earlier Python
+        # process's calls, so every id carries a prefix of this object's own.
+        self.prefix = secrets.token_hex(4)
+        self.ids = itertools.count(1)
+        # The driver evaluates one request at a time: a call's timeout starts
+        # when its turn comes.
+        self.lock = threading.Lock()
 
     @property
     def pid(self) -> int:
@@ -292,13 +319,17 @@ class _Repl:
         return tail
 
     def displayed_cmd(self) -> list[str]:
-        # The driver the interpreter runs is elided: this argv rides into
+        # The loader the interpreter runs is elided: this argv rides into
         # `status`, the resource registry and the footer.
-        return [*self.cmd[:-1], "<vis python driver>"]
+        return [*self.cmd[:-2], "<vis python driver>"]
 
     def request(self, payload: dict, timeout_s: float) -> dict:
         try:
-            return self.live.request(payload, timeout_s)
+            with self.lock:
+                wanted = f"{self.prefix}-{next(self.ids)}"
+                return self.live.request(
+                    dict(payload, id=wanted), timeout_s, wants=wanted
+                )
         except RuntimeGone as ex:
             self.kill()
             raise ReplError(
@@ -313,6 +344,72 @@ class _Repl:
     def kill(self) -> None:
         self.live.stop()
 
+    def detach(self) -> None:
+        """Leave the interpreter and its globals running for the next process."""
+        self.live.detach()
+
+
+def shell_id(cwd: str) -> str:
+    """The shell id of the REPL for `cwd`.
+
+    The id keeps the REPL across a sandbox restart: the next process that loads
+    this extension attaches to it, with its globals.
+    """
+    digest = hashlib.sha256(cwd.encode("utf-8")).hexdigest()[:12]
+    return f"vis-lang-python-{digest}"
+
+
+def _command(cwd: str) -> list[str]:
+    return [*detect_command(cwd), "-c", LOADER]
+
+
+def _kept_fingerprint(command) -> dict:
+    """The environment fingerprint that the start of a kept REPL placed."""
+    try:
+        words = shlex.split(str(command or ""))
+    except ValueError:
+        return {}
+    for word in words:
+        if word.startswith("3<>"):
+            place = os.path.join(os.path.dirname(word[3:]), "env.json")
+            try:
+                with open(place, encoding="utf-8") as handle:
+                    value = json.load(handle)
+            except (OSError, ValueError):
+                return {}
+            return value if isinstance(value, dict) else {}
+    return {}
+
+
+def _kept(cwd: str) -> _Repl | None:
+    """The REPL that an earlier Python process left running for `cwd`, or None.
+
+    It never starts an interpreter, and it never stops one that runs another
+    command: the globals of a live REPL are the user's work.
+    """
+    sid = shell_id(cwd)
+    try:
+        shell = shell_call()({"op": "logs", "id": sid, "offset": -1})
+    except Exception:
+        return None
+    if str(shell.get("status")) != "running":
+        return None
+    cmd = _command(cwd)
+    if shlex.join(cmd) not in str(shell.get("command") or ""):
+        return None
+    try:
+        live = runtime.start(
+            cmd, cwd=cwd, read_write=caches.granted_paths(), shell_id=sid
+        )
+    except Exception:
+        return None
+    if live.pid != shell.get("pid"):
+        # The kept rendezvous was gone, so a new interpreter started without
+        # its driver. That one is not the user's REPL.
+        live.stop()
+        return None
+    return _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")))
+
 
 def _live(cwd: str) -> _Repl | None:
     with _REPLS_LOCK:
@@ -320,6 +417,10 @@ def _live(cwd: str) -> _Repl | None:
         if repl is not None and not repl.is_alive():
             _REPLS.pop(cwd, None)
             return None
+        if repl is None:
+            repl = _kept(cwd)
+            if repl is not None:
+                _REPLS[cwd] = repl
         return repl
 
 
@@ -377,13 +478,19 @@ def start(options=None) -> dict:
     try:
         # The driver is a file next to the runtime's channels, not 17k of source
         # on a command line the shell would have to carry through intact.
-        cmd = [*detect_command(cwd), meeting.place("driver.py", DRIVER)]
+        meeting.place("driver.py", DRIVER)
+        # A later process reads the fingerprint back when it attaches.
+        meeting.place(
+            "env.json", json.dumps(dict(options.get("env_fingerprint") or {}))
+        )
+        cmd = _command(cwd)
         live = runtime.start(
             cmd,
             cwd=cwd,
             env=_child_environment(options.get("env")),
             meeting=meeting,
             read_write=caches.granted_paths(),
+            shell_id=shell_id(cwd),
         )
     except BaseException:
         meeting.close()
@@ -425,7 +532,8 @@ def stop(options=None) -> dict:
     managed the result says `not-managed`, not a stop that never happened."""
     options = options or {}
     cwd = _project_dir(options)
-    repl = _forget(cwd)
+    repl = _live(cwd)
+    _forget(cwd)
     if repl:
         repl.kill()
     return {
@@ -461,3 +569,20 @@ def evaluate(options) -> dict:
     answer = repl.request({"code": _text(code)}, timeout_s)
     answer["code"] = _text(code)
     return answer
+
+
+def detach_all() -> None:
+    """Leave every REPL running, kept for the next Python process.
+
+    A sandbox restart ends this Python process. The interpreters live on with
+    their globals, and the next call attaches to them. `stop` and the end of
+    the session stop them.
+    """
+    with _REPLS_LOCK:
+        live = list(_REPLS.values())
+        _REPLS.clear()
+    for repl in live:
+        repl.detach()
+
+
+atexit.register(detach_all)

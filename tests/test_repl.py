@@ -86,6 +86,26 @@ def test_a_second_start_keeps_the_live_repl(project):
     assert tools.repl_eval("kept", cwd=cwd).value == "7"
 
 
+def test_a_repl_outlives_a_sandbox_restart(project):
+    # A sandbox restart ended the Python process, and with it the interpreter
+    # and its globals. Now the next process attaches to the same interpreter.
+    tools, cwd = project
+    first = repl.start({"cwd": cwd, "env_fingerprint": {"TOKEN": "sha256:ab"}})
+    assert first["result"] == "started"
+    tools.repl_eval("kept = 41", cwd=cwd)
+    repl.detach_all()
+    status = repl.status({"cwd": cwd})
+    assert (status["status"], status["pid"]) == ("up", first["pid"])
+    assert status["env"] == {"TOKEN": "sha256:ab"}
+    assert tools.repl_eval("kept + 1", cwd=cwd).value == "42"
+    repl.detach_all()
+    again = repl.start({"cwd": cwd})
+    assert (again["result"], again["pid"]) == ("already-running", first["pid"])
+    repl.detach_all()
+    assert tools.repl_stop(cwd=cwd).detail == "stopped"
+    assert tools.repl_status(cwd=cwd).detail == "not running"
+
+
 def test_stopping_without_a_repl_is_safe(project):
     tools, cwd = project
     stopped = tools.repl_stop(cwd=cwd)
@@ -103,7 +123,14 @@ def test_the_interpreter_is_handed_the_caches_it_downloads_into(tmp_path, monkey
     seen = {}
 
     def fake_start(
-        command, *, cwd=None, env=None, read_write=(), name="runtime", meeting=None
+        command,
+        *,
+        cwd=None,
+        env=None,
+        read_write=(),
+        name="runtime",
+        meeting=None,
+        shell_id=None,
     ):
         seen["read_write"] = [str(path) for path in read_write]
         raise RuntimeError("not starting a real interpreter here")
