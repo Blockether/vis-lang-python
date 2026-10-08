@@ -1,5 +1,7 @@
 """The managed REPL keeps its globals and never leaves a child behind."""
 
+import time
+
 import pytest
 
 from vis_lang_python import caches, repl
@@ -156,3 +158,45 @@ def test_a_long_value_comes_back_pretty_printed(project):
     ]
     assert tools.repl_eval("[1, 2, 3]", cwd=cwd).value == "[1, 2, 3]"
     assert tools.repl_eval("'x' * 100", cwd=cwd).value == repr("x" * 100)
+
+
+def _launcher(monkeypatch, script):
+    """Start the REPL through `sh -c script`, a stand-in for `uv run python`."""
+    monkeypatch.setattr(
+        repl, "detect_command", lambda cwd: ["sh", "-c", script, "launcher"]
+    )
+    monkeypatch.setattr(repl, "PING_TIMEOUT_S", 1.0)
+
+
+def test_a_start_waits_while_the_launcher_reports_progress(project, monkeypatch):
+    # Blockether/vis#343: `uv run` installed packages for longer than the startup
+    # ping budget, and the start killed it in the middle of the installation.
+    tools, cwd = project
+    _launcher(
+        monkeypatch,
+        'for n in 1 2 3 4 5 6 7 8 9 10; do echo "installing $n" >&2; sleep 0.3; done;'
+        ' exec python3 "$@"',
+    )
+    started = repl.start({"cwd": cwd})
+    assert started["result"] == "started", started
+    assert tools.repl_eval("6 * 7", cwd=cwd).value == "42"
+
+
+def test_a_quiet_launcher_fails_its_start(project, monkeypatch):
+    _, cwd = project
+    _launcher(monkeypatch, "sleep 30")
+    began = time.monotonic()
+    failed = repl.start({"cwd": cwd})
+    assert failed["result"] == "failed"
+    assert "no output and no answer for 1s" in failed["message"]
+    assert time.monotonic() - began < 10
+    assert repl.status({"cwd": cwd})["status"] == "down"
+
+
+def test_a_launcher_that_exits_fails_at_once_with_its_error(project, monkeypatch):
+    _, cwd = project
+    _launcher(monkeypatch, "echo 'a hash was expected' >&2; exit 3")
+    failed = repl.start({"cwd": cwd})
+    assert failed["result"] == "failed"
+    assert failed["exit"] == 3
+    assert "a hash was expected" in failed["log_tail"]

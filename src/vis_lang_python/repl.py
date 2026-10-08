@@ -179,6 +179,18 @@ LOADER = (
 for every start in one directory, so a later process finds the runtime by it."""
 
 PING_TIMEOUT_S = 5.0
+"""How long a started interpreter can stay quiet before its startup ping fails."""
+
+LAUNCHER_QUIET_S = 60.0
+"""How long `uv run` or `poetry run` can stay quiet before the startup fails.
+
+These launchers install the project's packages before the interpreter starts.
+Their progress output keeps the wait open, so only silence counts."""
+
+LAUNCHERS = ("uv", "poetry")
+
+STARTUP_POLL_S = 0.25
+"""How often a start looks at the child while it waits for the ping answer."""
 DEFAULT_EVAL_TIMEOUT_S = 30.0
 
 _REPLS: dict[str, _Repl] = {}
@@ -305,6 +317,14 @@ class _Repl:
     def exit_code(self):
         return self.live.exit_code
 
+    def log_size(self):
+        """How much the child has printed to its log so far. Progress output
+        makes it grow, also when a spinner redraws the same line."""
+        try:
+            return self.live.shell.logs(-1).get("next_offset")
+        except Exception:
+            return None
+
     def stderr_tail(self) -> list[str]:
         # Whatever the interpreter says about itself stays on its own log, which
         # this reads back the moment the runtime is found dead. The pause is for
@@ -361,6 +381,44 @@ def shell_id(cwd: str) -> str:
 
 def _command(cwd: str) -> list[str]:
     return [*detect_command(cwd), "-c", LOADER]
+
+
+def _await_startup(repl: _Repl) -> dict:
+    """The child's answer to its startup ping.
+
+    `uv run` and `poetry run` create the environment and install the project's
+    packages before the interpreter starts. That can take minutes. So the wait
+    has no fixed deadline: it continues while the child lives and its log grows.
+    It fails at once when the child exits. It also fails after a quiet period
+    with no output and no answer. A cancel stops the wait at any time.
+    """
+    quiet_s = LAUNCHER_QUIET_S if repl.cmd[0] in LAUNCHERS else PING_TIMEOUT_S
+    outcome: dict = {}
+
+    def ping():
+        try:
+            outcome["pong"] = repl.request({"op": "ping"}, float("inf"))
+        except BaseException as ex:
+            outcome["error"] = ex
+
+    waiter = threading.Thread(target=ping, name="vis-lang-python-startup", daemon=True)
+    waiter.start()
+    seen = repl.log_size()
+    quiet_since = time.monotonic()
+    while True:
+        waiter.join(STARTUP_POLL_S)
+        if not waiter.is_alive():
+            break
+        size = repl.log_size()
+        if size != seen:
+            seen, quiet_since = size, time.monotonic()
+        elif time.monotonic() - quiet_since >= quiet_s:
+            raise ReplError(
+                f"Python REPL gave no output and no answer for {quiet_s:g}s"
+            )
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["pong"]
 
 
 def _kept_fingerprint(command) -> dict:
@@ -461,8 +519,9 @@ def start(options=None) -> dict:
 
     A live REPL is NEVER silently replaced: its globals ARE the session's work.
     So a second start answers `already-running`. A start succeeds only after the
-    child answers its protocol ping. A failed child is never reported as a
-    usable REPL.
+    child answers its protocol ping. The wait continues while `uv run` or
+    `poetry run` installs packages (see `_await_startup`). A failed child is
+    never reported as a usable REPL.
     """
     options = options or {}
     cwd = _project_dir(options)
@@ -497,10 +556,14 @@ def start(options=None) -> dict:
         raise
     repl = _Repl(live, cwd, cmd, options.get("env_fingerprint"))
     try:
-        pong = repl.request({"op": "ping"}, PING_TIMEOUT_S)
+        pong = _await_startup(repl)
         if pong.get("pong") is not True:
             raise ReplError("Python REPL did not acknowledge its startup ping")
-    except Exception as ex:
+    except BaseException as ex:
+        if not isinstance(ex, Exception):
+            # A cancelled start leaves no child behind.
+            repl.kill()
+            raise
         exit_code = repl.exit_code()
         tail = repl.stderr_tail()
         repl.kill()
