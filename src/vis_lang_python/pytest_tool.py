@@ -1,10 +1,11 @@
 """Running the project's tests with pytest.
 
 pytest runs under the project's own interpreter: uv, Poetry, a `.venv` or
-`python3`. It is chosen the same way the REPL chooses one. So the tests import
-the project's dependencies, not the dependencies of this extension. Counts and
-failures come from the JUnit XML that pytest writes, never from its terminal
-output.
+`python3`, or `vis-agent python --shared` when the project's
+`python.environment` is `shared`. It is chosen the same way the REPL chooses
+one. So the tests import the project's dependencies, not the dependencies of
+this extension. Counts and failures come from the JUnit XML that pytest
+writes, never from its terminal output.
 """
 
 from __future__ import annotations
@@ -16,13 +17,13 @@ from pathlib import Path, PurePosixPath
 from vis_lang_interface import TestFailure, TestResult, process
 
 from vis_lang_python.caches import granted_paths
-from vis_lang_python.repl import detect_command
+from vis_lang_python.repl import detect_command, environment_hint
 
 OUTPUT_TAIL = 4000
 INSTALL_HINT = "add pytest to the project, for example `uv add --dev pytest`."
 
 
-def run(paths=(), *, root, keyword="", timeout_s=900):
+def run(paths=(), *, root, keyword="", timeout_s=900, shared=False):
     """Run pytest in `root` and read its JUnit report.
 
     Args:
@@ -30,6 +31,7 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
         root: Project directory to run in.
         keyword: Value for pytest's `-k` selection, or an empty string.
         timeout_s: Seconds before the run is abandoned.
+        shared: Run with `vis-agent python --shared`, not the project environment.
 
     Returns:
         A `TestResult` with one entry per failing test.
@@ -42,7 +44,7 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
     with tempfile.TemporaryDirectory() as workspace:
         report = Path(workspace) / "report.xml"
         command = [
-            *detect_command(str(root)),
+            *detect_command(str(root), shared=shared),
             "-m",
             "pytest",
             *[str(path) for path in paths],
@@ -63,7 +65,11 @@ def run(paths=(), *, root, keyword="", timeout_s=900):
         if not report.is_file():
             if "No module named pytest" in output:
                 raise process.ToolMissing(f"pytest is not installed. {INSTALL_HINT}")
-            raise RuntimeError(f"pytest wrote no report: {output.strip()[-1000:]}")
+            hint = environment_hint(output)
+            raise RuntimeError(
+                f"pytest wrote no report: {output.strip()[-1000:]}"
+                + (f"\n{hint}" if hint else "")
+            )
         return result_of(report.read_text(encoding="utf-8"), output, done.duration_ms)
 
 

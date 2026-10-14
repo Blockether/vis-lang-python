@@ -163,7 +163,7 @@ def test_a_long_value_comes_back_pretty_printed(project):
 def _launcher(monkeypatch, script):
     """Start the REPL through `sh -c script`, a stand-in for `uv run python`."""
     monkeypatch.setattr(
-        repl, "detect_command", lambda cwd: ["sh", "-c", script, "launcher"]
+        repl, "detect_command", lambda cwd, **_: ["sh", "-c", script, "launcher"]
     )
     monkeypatch.setattr(repl, "PING_TIMEOUT_S", 1.0)
 
@@ -200,3 +200,33 @@ def test_a_launcher_that_exits_fails_at_once_with_its_error(project, monkeypatch
     assert failed["result"] == "failed"
     assert failed["exit"] == 3
     assert "a hash was expected" in failed["log_tail"]
+
+
+# Regression, Blockether/vis#379: `python.environment: shared` must select the
+# shared interpreter, and say how to fix a missing `vis-agent`.
+def test_a_shared_environment_selects_vis_agent(tmp_path, monkeypatch):
+    (tmp_path / "uv.lock").write_text("")
+    monkeypatch.setattr(repl.shutil, "which", lambda name: f"/bin/{name}")
+    assert repl.detect_command(str(tmp_path)) == ["uv", "run", "python"]
+    assert repl.detect_command(str(tmp_path), shared=True) == [
+        "/bin/vis-agent",
+        "python",
+        "--shared",
+    ]
+    # A kept REPL of either environment is found again after a restart.
+    assert [command[0] for command in repl._kept_commands(str(tmp_path))] == [
+        "uv",
+        "/bin/vis-agent",
+    ]
+
+
+def test_a_shared_environment_without_vis_agent_names_the_fix(tmp_path, monkeypatch):
+    monkeypatch.setattr(repl.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="vis-agent is not on PATH"):
+        repl.detect_command(str(tmp_path), shared=True)
+
+
+def test_a_broken_virtualenv_start_names_both_fixes():
+    tail = "error: Project virtual environment directory `.venv` cannot be used because it is not a valid Python environment"
+    assert "uv sync" in repl.environment_hint(tail)
+    assert repl.environment_hint("ModuleNotFoundError: x") == ""

@@ -343,3 +343,25 @@ def test_every_tool_owns_an_activity_and_an_evaluation_shows_its_code(monkeypatc
         "Error",
         "no REPL",
     ]
+
+
+# Regression, Blockether/vis#379: the tools follow the project's `python.environment`.
+def test_the_shared_environment_reaches_tests_and_the_repl(tmp_path, monkeypatch):
+    seen = {}
+
+    def start(request):
+        seen["repl"] = request["shared"]
+        return {"cwd": request["cwd"], "status": "up"}
+
+    monkeypatch.setattr(
+        tools.pytest_tool,
+        "run",
+        lambda paths, *, root, **options: seen.setdefault("tests", options["shared"]),
+    )
+    monkeypatch.setattr(tools.repl, "start", start)
+    for environment, shared in (("project", False), ("shared", True)):
+        seen.clear()
+        language = tools.PythonTools(python_environment=lambda: environment)
+        language.run_tests(cwd=str(tmp_path))
+        language.repl_start(cwd=str(tmp_path))
+        assert seen == {"tests": shared, "repl": shared}

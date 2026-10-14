@@ -104,7 +104,8 @@ PROMPT = prompt.routing(
     notes=(
         "`py.repl_start` uses the project's own interpreter (uv, Poetry, a local virtualenv or"
         " python3, in that order), so the REPL sees the project's packages; the sandbox block does"
-        " not. `py.repl_eval` needs that interpreter started first.",
+        " not. When vis.yml sets `python.environment: shared`, it uses `vis-agent python --shared`"
+        " and never the project's `.venv`. `py.repl_eval` needs that interpreter started first.",
         "`py.repl_eval` runs nothing from code that does not parse. It evaluates a safe repair, such"
         " as a missing closer, and lists it in `repairs`. With no safe repair, it reports where the"
         " code stops parsing.",
@@ -127,9 +128,20 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.10.1",
+        version="1.11.0",
         alias="py",
-        symbols=[vis.Symbol(PythonTools(workspace_root=vis.workspace_root), name="py")],
+        symbols=[
+            vis.Symbol(
+                PythonTools(
+                    workspace_root=vis.workspace_root,
+                    # Vis without `vis.python_environment` has no shared setting.
+                    python_environment=getattr(
+                        vis, "python_environment", lambda: "project"
+                    ),
+                ),
+                name="py",
+            )
+        ],
         prompt=PROMPT,
         op_hooks=[
             vis.OpHook(["patch"], GUARD.before_patch),

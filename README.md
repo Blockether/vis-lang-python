@@ -27,6 +27,11 @@ Which interpreter runs your tests and REPL is decided per project, first match w
 (`uv.lock` or `[tool.uv]`), Poetry (`poetry.lock`), a local `.venv`, then `python3`. Ruff is taken
 from the project's virtualenv, then `PATH`, then the copy installed with this extension.
 
+If the project's `vis.yml` sets `python: {environment: shared}`, tests and the REPL run with
+`vis-agent python --shared` instead. They then import Vis shared packages and never use `.venv`.
+Install the project's dependencies there with `vis-agent python --shared uv sync`. When a broken
+`.venv` stops pytest or the REPL, the error names both fixes.
+
 The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
 reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.
 

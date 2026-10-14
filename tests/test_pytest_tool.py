@@ -108,3 +108,45 @@ def test_nested_classes_name_a_failure_and_a_missing_line_stays_unknown():
         0,
     )
     assert failure.message == "failed on setup with fixture 'db' not found"
+
+
+# Regression, Blockether/vis#379: vis.yml set `python.environment: shared`, but
+# pytest still ran through `uv run` and a broken `.venv` stopped it.
+def test_a_shared_environment_runs_pytest_through_vis_agent(tmp_path, monkeypatch):
+    (tmp_path / "uv.lock").write_text("")
+    seen = {}
+
+    def fake_run(command, **options):
+        seen["command"] = command
+        Path(command[-1].split("=", 1)[1]).write_text(REPORT, encoding="utf-8")
+        return SimpleNamespace(out="", err="", duration_ms=1, exit_code=0)
+
+    monkeypatch.setattr(pytest_tool.process, "run", fake_run)
+    monkeypatch.setattr("shutil.which", lambda name: f"/bin/{name}")
+    pytest_tool.run(root=str(tmp_path), shared=True)
+    assert seen["command"][:5] == [
+        "/bin/vis-agent",
+        "python",
+        "--shared",
+        "-m",
+        "pytest",
+    ]
+
+
+def test_a_broken_virtualenv_names_both_fixes(tmp_path, monkeypatch):
+    # Blockether/vis#379: uv's own message reached the user without a next step.
+    broken = (
+        "error: Project virtual environment directory `.venv` cannot be used"
+        " because it is not a valid Python environment (no Python executable was found)"
+    )
+    monkeypatch.setattr(
+        pytest_tool.process,
+        "run",
+        lambda command, **options: SimpleNamespace(
+            out="", err=broken, duration_ms=1, exit_code=2
+        ),
+    )
+    with pytest.raises(RuntimeError) as failure:
+        pytest_tool.run(root=str(tmp_path))
+    assert "uv sync" in str(failure.value)
+    assert "python: {environment: shared}" in str(failure.value)

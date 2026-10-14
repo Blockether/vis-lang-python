@@ -182,12 +182,13 @@ PING_TIMEOUT_S = 5.0
 """How long a started interpreter can stay quiet before its startup ping fails."""
 
 LAUNCHER_QUIET_S = 60.0
-"""How long `uv run` or `poetry run` can stay quiet before the startup fails.
+"""How long a launcher can stay quiet before the startup fails.
 
-These launchers install the project's packages before the interpreter starts.
-Their progress output keeps the wait open, so only silence counts."""
+`uv run` and `poetry run` install the project's packages before the interpreter
+starts. `vis-agent python --shared` prepares the embedded runtime first, which
+takes seconds. Their progress output keeps the wait open, so only silence counts."""
 
-LAUNCHERS = ("uv", "poetry")
+LAUNCHERS = ("uv", "poetry", "vis-agent")
 
 STARTUP_POLL_S = 0.25
 """How often a start looks at the child while it waits for the ping answer."""
@@ -260,11 +261,31 @@ def _is_uv_project(root: Path) -> bool:
     return isinstance(tool, dict) and isinstance(tool.get("uv"), dict)
 
 
-def detect_command(cwd: str) -> list[str]:
-    """The argv PREFIX that launches a project-aware Python in `cwd`. The first
-    match wins, in this order: uv, Poetry, a project virtualenv, then the system
-    interpreter. uv needs `uv.lock` or `[tool.uv]`, plus `uv` on PATH. Poetry
-    needs `poetry.lock`, plus `poetry` on PATH."""
+SHARED_MISSING = (
+    "python.environment is shared, but vis-agent is not on PATH. Install vis-agent,"
+    " or set python.environment to project in vis.yml."
+)
+BROKEN_ENVIRONMENT = (
+    "The project's .venv is not a valid Python environment. Recreate it with"
+    " `uv sync`, or set `python: {environment: shared}` in vis.yml to run with"
+    " Vis shared packages."
+)
+
+
+def detect_command(cwd: str, *, shared: bool = False) -> list[str]:
+    """The argv PREFIX that launches a project-aware Python in `cwd`.
+
+    With `shared`, the project's `python.environment` is `shared`: the prefix is
+    `vis-agent python --shared`, which imports Vis shared packages and never
+    reads `.venv`. Otherwise the first match wins, in this order: uv, Poetry, a
+    project virtualenv, then the system interpreter. uv needs `uv.lock` or
+    `[tool.uv]`, plus `uv` on PATH. Poetry needs `poetry.lock`, plus `poetry` on
+    PATH."""
+    if shared:
+        agent = shutil.which("vis-agent")
+        if not agent:
+            raise RuntimeError(SHARED_MISSING)
+        return [agent, "python", "--shared"]
     root = Path(cwd)
     if _is_uv_project(root) and shutil.which("uv"):
         return ["uv", "run", "python"]
@@ -274,6 +295,11 @@ def detect_command(cwd: str) -> list[str]:
     if venv:
         return [venv]
     return ["python3" if shutil.which("python3") else "python"]
+
+
+def environment_hint(output: str) -> str:
+    """The fix for a broken project environment that `output` reports, or ""."""
+    return BROKEN_ENVIRONMENT if "not a valid Python environment" in output else ""
 
 
 def _child_environment(values) -> dict:
@@ -379,8 +405,16 @@ def shell_id(cwd: str) -> str:
     return f"vis-lang-python-{digest}"
 
 
-def _command(cwd: str) -> list[str]:
-    return [*detect_command(cwd), "-c", LOADER]
+def _command(cwd: str, *, shared: bool = False) -> list[str]:
+    return [*detect_command(cwd, shared=shared), "-c", LOADER]
+
+
+def _kept_commands(cwd: str) -> list[list[str]]:
+    """The commands that a kept REPL for `cwd` can run: project, then shared."""
+    commands = [_command(cwd)]
+    if shutil.which("vis-agent"):
+        commands.append(_command(cwd, shared=True))
+    return commands
 
 
 def _await_startup(repl: _Repl) -> dict:
@@ -392,7 +426,9 @@ def _await_startup(repl: _Repl) -> dict:
     It fails at once when the child exits. It also fails after a quiet period
     with no output and no answer. A cancel stops the wait at any time.
     """
-    quiet_s = LAUNCHER_QUIET_S if repl.cmd[0] in LAUNCHERS else PING_TIMEOUT_S
+    quiet_s = (
+        LAUNCHER_QUIET_S if Path(repl.cmd[0]).name in LAUNCHERS else PING_TIMEOUT_S
+    )
     outcome: dict = {}
 
     def ping():
@@ -452,8 +488,9 @@ def _kept(cwd: str) -> _Repl | None:
         return None
     if str(shell.get("status")) != "running":
         return None
-    cmd = _command(cwd)
-    if shlex.join(cmd) not in str(shell.get("command") or ""):
+    command = str(shell.get("command") or "")
+    cmd = next((c for c in _kept_commands(cwd) if shlex.join(c) in command), None)
+    if cmd is None:
         return None
     try:
         live = runtime.start(
@@ -542,7 +579,7 @@ def start(options=None) -> dict:
         meeting.place(
             "env.json", json.dumps(dict(options.get("env_fingerprint") or {}))
         )
-        cmd = _command(cwd)
+        cmd = _command(cwd, shared=bool(options.get("shared")))
         live = runtime.start(
             cmd,
             cwd=cwd,
@@ -580,6 +617,9 @@ def start(options=None) -> dict:
             answer["exit"] = exit_code
         if tail:
             answer["log_tail"] = tail
+        hint = environment_hint("\n".join(tail or ()))
+        if hint:
+            answer["message"] += f". {hint}"
         return answer
 
     with _REPLS_LOCK:

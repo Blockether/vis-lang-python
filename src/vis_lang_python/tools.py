@@ -130,9 +130,20 @@ def _unparsed(syntax, exc):
 class PythonTools:
     """Format, lint and test Python, and evaluate in a project REPL."""
 
-    def __init__(self, *, workspace_root=Path.cwd):
-        """Keep a live root provider. Hosted tools receive the SDK function."""
+    def __init__(
+        self, *, workspace_root=Path.cwd, python_environment=lambda: "project"
+    ):
+        """Keep live providers. Hosted tools receive the SDK functions.
+
+        `python_environment` answers `project` or `shared`, the project's
+        `python.environment`. With `shared`, tests and the REPL run with
+        `vis-agent python --shared`.
+        """
         self._workspace_root = workspace_root
+        self._python_environment = python_environment
+
+    def _shared(self):
+        return self._python_environment() == "shared"
 
     def _absolute(self, path):
         return _absolute(path, self._workspace_root)
@@ -202,7 +213,7 @@ class PythonTools:
         keyword: Annotated[str, "Value for pytest's -k selection."] = "",
         timeout_s: Annotated[int, "Seconds before the run is abandoned."] = 900,
     ) -> TestResult:
-        """Run pytest under the project's own interpreter.
+        """Run pytest under the project's own interpreter, or the shared one.
 
         Counts and failures come from the JUnit report pytest writes. Raises
         ToolMissing when the project has no pytest and ToolTimeout when the run
@@ -214,6 +225,7 @@ class PythonTools:
             root=self._root(cwd, paths),
             keyword=keyword,
             timeout_s=timeout_s,
+            shared=self._shared(),
         )
 
     def repl_start(
@@ -223,11 +235,12 @@ class PythonTools:
         """Start a persistent interpreter for this directory, or keep the live one.
 
         The project's own interpreter is used: uv, Poetry, a local virtualenv or
-        python3, in that order. A live REPL is never replaced, because its
+        python3, in that order. When the project's python.environment is shared,
+        vis-agent python --shared is used. A live REPL is never replaced, because its
         globals are the work. Raises RuntimeError when the interpreter fails its
         startup handshake.
         """
-        answer = repl.start({"cwd": str(self._absolute(cwd))})
+        answer = repl.start({"cwd": str(self._absolute(cwd)), "shared": self._shared()})
         if answer.get("result") == "failed":
             detail = " ".join(answer.get("log_tail") or ())
             raise RuntimeError(
