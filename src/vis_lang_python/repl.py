@@ -194,8 +194,8 @@ STARTUP_POLL_S = 0.25
 """How often a start looks at the child while it waits for the ping answer."""
 DEFAULT_EVAL_TIMEOUT_S = 30.0
 
-PROBE_TIMEOUT_S = 60.0
-"""How long the check run after a silent failed start can take."""
+PROBE_TIMEOUT_S = 60
+"""Seconds the check run after a silent failed start can take."""
 
 _REPLS: dict[str, _Repl] = {}
 _REPLS_LOCK = threading.RLock()
