@@ -28,7 +28,7 @@ import threading
 import time
 from pathlib import Path
 
-from vis_lang_interface import RuntimeGone, runtime
+from vis_lang_interface import RuntimeGone, process, runtime
 from vis_lang_interface.process import shell_call
 
 from vis_lang_python import caches
@@ -194,6 +194,9 @@ STARTUP_POLL_S = 0.25
 """How often a start looks at the child while it waits for the ping answer."""
 DEFAULT_EVAL_TIMEOUT_S = 30.0
 
+PROBE_TIMEOUT_S = 60.0
+"""How long the check run after a silent failed start can take."""
+
 _REPLS: dict[str, _Repl] = {}
 _REPLS_LOCK = threading.RLock()
 
@@ -300,6 +303,43 @@ def detect_command(cwd: str, *, shared: bool = False) -> list[str]:
 def environment_hint(output: str) -> str:
     """The fix for a broken project environment that `output` reports, or ""."""
     return BROKEN_ENVIRONMENT if "not a valid Python environment" in output else ""
+
+
+def exit_meaning(code) -> str:
+    """What a shell exit status says about why a child stopped, or ""."""
+    if not isinstance(code, int) or isinstance(code, bool):
+        return ""
+    if code == 126:
+        return "the command was found but could not run (no permission, or a jail refused it)"
+    if code == 127:
+        return "the command was not found"
+    if code > 128:
+        return f"it was killed by signal {code - 128}"
+    if code < 0:
+        return f"it was killed by signal {-code}"
+    return ""
+
+
+def _probe(cmd: list[str], cwd: str, env: dict) -> dict:
+    """Run the interpreter of a failed start once in the foreground.
+
+    A kept REPL that exits at once can leave an empty log. This run uses the same
+    interpreter, directory, environment and grants, and keeps its own output. So
+    a launcher or jail error shows, and a working run shows that only the kept
+    REPL failed."""
+    argv = [*cmd[:-2], "-c", "import sys; print(sys.version)"]
+    try:
+        done = process.run(
+            argv,
+            cwd=cwd,
+            timeout_s=PROBE_TIMEOUT_S,
+            env=env,
+            read_write=caches.granted_paths(),
+        )
+    except Exception as ex:
+        return {"error": str(ex)}
+    said = [line for line in f"{done.out}\n{done.err}".splitlines() if line.strip()]
+    return {"exit": done.exit_code, "output": said[-STDERR_TAIL_LINES:]}
 
 
 def _child_environment(values) -> dict:
@@ -457,22 +497,29 @@ def _await_startup(repl: _Repl) -> dict:
     return outcome["pong"]
 
 
-def _kept_fingerprint(command) -> dict:
-    """The environment fingerprint that the start of a kept REPL placed."""
+def _kept_directory(command) -> str | None:
+    """The rendezvous directory in the shell line of a kept REPL, or None."""
     try:
         words = shlex.split(str(command or ""))
     except ValueError:
-        return {}
+        return None
     for word in words:
         if word.startswith("3<>"):
-            place = os.path.join(os.path.dirname(word[3:]), "env.json")
-            try:
-                with open(place, encoding="utf-8") as handle:
-                    value = json.load(handle)
-            except (OSError, ValueError):
-                return {}
-            return value if isinstance(value, dict) else {}
-    return {}
+            return os.path.dirname(word[3:])
+    return None
+
+
+def _kept_fingerprint(command) -> dict:
+    """The environment fingerprint that the start of a kept REPL placed."""
+    place = _kept_directory(command)
+    if place is None:
+        return {}
+    try:
+        with open(os.path.join(place, "env.json"), encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _kept(cwd: str) -> _Repl | None:
@@ -491,6 +538,12 @@ def _kept(cwd: str) -> _Repl | None:
     command = str(shell.get("command") or "")
     cmd = next((c for c in _kept_commands(cwd) if shlex.join(c) in command), None)
     if cmd is None:
+        return None
+    place = _kept_directory(command)
+    if not place or not os.path.isfile(os.path.join(place, "driver.py")):
+        # Nothing can reach an interpreter whose rendezvous is gone. An attach
+        # here would start a new child without its driver (Blockether/vis#389).
+        # The next start replaces the lost interpreter.
         return None
     try:
         live = runtime.start(
@@ -602,6 +655,7 @@ def start(options=None) -> dict:
             repl.kill()
             raise
         exit_code = repl.exit_code()
+        alive = repl.is_alive()
         tail = repl.stderr_tail()
         repl.kill()
         answer = {
@@ -615,8 +669,16 @@ def start(options=None) -> dict:
         }
         if exit_code is not None:
             answer["exit"] = exit_code
+            meaning = exit_meaning(exit_code)
+            answer["message"] += f". The interpreter exited with status {exit_code}" + (
+                f": {meaning}" if meaning else ""
+            )
         if tail:
             answer["log_tail"] = tail
+        elif not alive:
+            # Blockether/vis#389: the child left no output. Ask the same
+            # interpreter again, where its output cannot get lost.
+            answer["probe"] = _probe(cmd, cwd, _child_environment(options.get("env")))
         hint = environment_hint("\n".join(tail or ()))
         if hint:
             answer["message"] += f". {hint}"

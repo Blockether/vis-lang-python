@@ -1,8 +1,12 @@
 """The managed REPL keeps its globals and never leaves a child behind."""
 
+import os
+import shlex
+import shutil
 import time
 
 import pytest
+from vis_lang_interface.process import shell_call
 
 from vis_lang_python import caches, repl
 from vis_lang_python.tools import PythonTools
@@ -200,6 +204,73 @@ def test_a_launcher_that_exits_fails_at_once_with_its_error(project, monkeypatch
     assert failed["result"] == "failed"
     assert failed["exit"] == 3
     assert "a hash was expected" in failed["log_tail"]
+
+
+# Regression, Blockether/vis#389: a shared-env REPL exited before its ping with an
+# empty log, and the error dropped the exit status.
+def test_a_silent_exit_names_its_status_and_checks_the_interpreter(
+    project, monkeypatch
+):
+    tools, cwd = project
+    _launcher(monkeypatch, "exit 126")
+    failed = repl.start({"cwd": cwd})
+    assert failed["result"] == "failed"
+    assert failed["exit"] == 126
+    assert "status 126: the command was found but could not run" in failed["message"]
+    assert "log_tail" not in failed
+    assert failed["probe"] == {"exit": 126, "output": []}
+    with pytest.raises(RuntimeError) as raised:
+        tools.repl_start(cwd=cwd)
+    text = str(raised.value)
+    assert "Command: sh -c exit 126 launcher <vis python driver>" in text
+    assert "The interpreter wrote nothing to its log." in text
+    assert "A check run of the same interpreter exited with status 126" in text
+
+
+def test_a_silent_kept_only_failure_says_the_interpreter_works(project, monkeypatch):
+    tools, cwd = project
+    # Only the kept REPL has a rendezvous, so only it exits.
+    _launcher(monkeypatch, '[ -n "$VIS_LANG_RENDEZVOUS" ] && exit 3; exec python3 "$@"')
+    with pytest.raises(RuntimeError) as raised:
+        tools.repl_start(cwd=cwd)
+    text = str(raised.value)
+    assert "The interpreter exited with status 3" in text
+    assert "only the kept REPL failed" in text
+    assert "Check run output:" in text
+
+
+def test_exit_statuses_name_their_cause():
+    assert "could not run" in repl.exit_meaning(126)
+    assert repl.exit_meaning(127) == "the command was not found"
+    assert repl.exit_meaning(137) == "it was killed by signal 9"
+    assert repl.exit_meaning(-15) == "it was killed by signal 15"
+    assert repl.exit_meaning(1) == ""
+    assert repl.exit_meaning(None) == ""
+
+
+# Regression, Blockether/vis#389: a kept REPL whose rendezvous was gone made the
+# attach start a second child without its driver, which failed with
+# FileNotFoundError for driver.py.
+def test_a_kept_repl_without_its_rendezvous_is_replaced(project, monkeypatch):
+    tools, cwd = project
+    first = repl.start({"cwd": cwd})
+    repl.detach_all()
+    kept = shell_call()({"op": "logs", "id": repl.shell_id(cwd), "offset": -1})
+    held = next(w for w in shlex.split(kept["command"]) if w.startswith("3<>"))
+    shutil.rmtree(os.path.dirname(held[3:]))
+    meetings = []
+    real_start = repl.runtime.start
+
+    def counted_start(command, **options):
+        meetings.append(options.get("meeting"))
+        return real_start(command, **options)
+
+    monkeypatch.setattr(repl.runtime, "start", counted_start)
+    again = repl.start({"cwd": cwd})
+    assert again["result"] == "started", again
+    assert again["pid"] != first["pid"]
+    assert None not in meetings
+    assert tools.repl_eval("6 * 7", cwd=cwd).value == "42"
 
 
 # Regression, Blockether/vis#379: `python.environment: shared` must select the

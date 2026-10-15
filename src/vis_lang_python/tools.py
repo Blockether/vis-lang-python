@@ -127,6 +127,41 @@ def _unparsed(syntax, exc):
     ) + (exc or "")
 
 
+def _start_failure(answer):
+    """The error text of a failed REPL start: the cause, the command and the output."""
+    lines = [str(answer.get("message") or "REPL failed")]
+    command = answer.get("cmd")
+    if command:
+        lines.append(f"Command: {' '.join(str(part) for part in command)}")
+    tail = answer.get("log_tail")
+    if tail:
+        lines.append("Last output of the interpreter:")
+        lines.extend(tail)
+        return "\n".join(lines)
+    probe = answer.get("probe")
+    if not probe:
+        return "\n".join(lines)
+    lines.append("The interpreter wrote nothing to its log.")
+    said = list(probe.get("output") or ())
+    if "error" in probe:
+        lines.append(f"A check run of the same interpreter failed: {probe['error']}")
+    elif probe.get("exit") == 0:
+        lines.append(
+            "A check run of the same interpreter works, so only the kept REPL failed."
+        )
+    else:
+        code = probe.get("exit")
+        meaning = repl.exit_meaning(code)
+        lines.append(
+            f"A check run of the same interpreter exited with status {code}"
+            + (f": {meaning}." if meaning else ".")
+        )
+    if said:
+        lines.append("Check run output:")
+        lines.extend(said)
+    return "\n".join(lines)
+
+
 class PythonTools:
     """Format, lint and test Python, and evaluate in a project REPL."""
 
@@ -242,10 +277,7 @@ class PythonTools:
         """
         answer = repl.start({"cwd": str(self._absolute(cwd)), "shared": self._shared()})
         if answer.get("result") == "failed":
-            detail = " ".join(answer.get("log_tail") or ())
-            raise RuntimeError(
-                f"{answer.get('message', 'REPL failed')} {detail}".strip()
-            )
+            raise RuntimeError(_start_failure(answer))
         return _session("python", answer)
 
     def repl_status(
