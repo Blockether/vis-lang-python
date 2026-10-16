@@ -409,7 +409,9 @@ class _Repl:
         # `status`, the resource registry and the footer.
         return [*self.cmd[:-2], "<vis python driver>"]
 
-    def request(self, payload: dict, timeout_s: float) -> dict:
+    def request(
+        self, payload: dict, timeout_s: float, *, is_stopped_when_gone: bool = True
+    ) -> dict:
         try:
             with self.lock:
                 wanted = f"{self.prefix}-{next(self.ids)}"
@@ -417,7 +419,8 @@ class _Repl:
                     dict(payload, id=wanted), timeout_s, wants=wanted
                 )
         except RuntimeGone as ex:
-            self.kill()
+            if is_stopped_when_gone:
+                self.kill()
             raise ReplError(
                 "Python REPL closed the connection; start it again with "
                 f"py.repl_start(). ({ex})"
@@ -472,8 +475,13 @@ def _await_startup(repl: _Repl) -> dict:
     outcome: dict = {}
 
     def ping():
+        # The host refuses host calls on this thread (Blockether/vis#389). So
+        # this thread never stops the child: the calling thread checks it and
+        # cleans up.
         try:
-            outcome["pong"] = repl.request({"op": "ping"}, float("inf"))
+            outcome["pong"] = repl.request(
+                {"op": "ping"}, float("inf"), is_stopped_when_gone=False
+            )
         except BaseException as ex:
             outcome["error"] = ex
 
@@ -485,6 +493,8 @@ def _await_startup(repl: _Repl) -> dict:
         waiter.join(STARTUP_POLL_S)
         if not waiter.is_alive():
             break
+        if not repl.is_alive():
+            raise ReplError("Python REPL exited before it answered its startup ping")
         size = repl.log_size()
         if size != seen:
             seen, quiet_since = size, time.monotonic()

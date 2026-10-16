@@ -3,6 +3,7 @@
 import os
 import shlex
 import shutil
+import threading
 import time
 
 import pytest
@@ -301,3 +302,42 @@ def test_a_broken_virtualenv_start_names_both_fixes():
     tail = "error: Project virtual environment directory `.venv` cannot be used because it is not a valid Python environment"
     assert "uv sync" in repl.environment_hint(tail)
     assert repl.environment_hint("ModuleNotFoundError: x") == ""
+
+
+class _MainThreadOnly:
+    """A shell handle that refuses host calls off the main thread, as Vis does."""
+
+    def __init__(self, handle):
+        self._handle = handle
+
+    def get(self, key, default=None):
+        return self._handle.get(key, default)
+
+    def __getattr__(self, name):
+        found = getattr(self._handle, name)
+        if not callable(found):
+            return found
+
+        def call(*args, **kwargs):
+            if threading.current_thread() is not threading.main_thread():
+                raise RuntimeError("Worker is not authorized for this host session")
+            return found(*args, **kwargs)
+
+        return call
+
+
+def test_a_start_survives_refused_host_calls_on_its_ping_thread(project, monkeypatch):
+    # Blockether/vis#389: the ping thread found the child "dead" and removed its
+    # rendezvous before the child read its driver.
+    started = repl.runtime.start
+
+    def start(*args, **kwargs):
+        live = started(*args, **kwargs)
+        live.shell = _MainThreadOnly(live.shell)
+        return live
+
+    monkeypatch.setattr(repl.runtime, "start", start)
+    tools, cwd = project
+    answer = tools.repl_start(cwd=cwd)
+    assert answer.is_running is True, answer
+    assert tools.repl_eval("1 + 1", cwd=cwd).value == "2"
