@@ -35,6 +35,12 @@ Install the project's dependencies there with `vis-agent python --shared uv sync
 The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
 reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.
 
+When Vis confines a session, its jail reads only the system directories, the workspace and granted
+paths. `vis-agent`, `uv`, Poetry or ruff under your home directory, for example in `~/.local/bin`,
+are outside them. The extension declares each of these programs on `PATH`, and the file that it
+links to, as a read-only grant. Vis checks the grants and gives them only to the extension's own
+processes, not to the agent. A Vis without toolchain grants gets no declaration. There, add the
+paths to `jail.filesystem` yourself.
 ## Keep files parseable
 
 Edit hooks repair structural mistakes and validate syntax locally in Python.
