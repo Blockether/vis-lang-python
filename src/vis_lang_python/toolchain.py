@@ -22,16 +22,18 @@ def _covers(path: str, protected: str) -> bool:
     return protected == path or protected.startswith(path.rstrip(os.sep) + os.sep)
 
 
-def grantable(paths) -> tuple[str, ...]:
+def grantable(paths, *, existing: bool = True) -> tuple[str, ...]:
     """The paths of `paths` that the host accepts as grants, in order, once each.
 
     The host refuses a grant whose resolved path is the filesystem root, or that
     contains the home directory or the Vis home. Such a grant would stop the
-    extension from registering, so it is left out here. Relative and missing
-    paths are left out too.
+    extension from registering, so it is left out here. Relative paths are left
+    out too.
 
     Args:
         paths: Candidate paths.
+        existing: Leave out paths that do not exist. A cache that a tool creates
+            later needs its grant before it exists.
 
     Returns:
         The kept paths, as declared.
@@ -42,7 +44,9 @@ def grantable(paths) -> tuple[str, ...]:
     )
     kept: list[str] = []
     for path in paths:
-        if not path or not os.path.isabs(path) or not os.path.exists(path):
+        if not path or not os.path.isabs(path):
+            continue
+        if existing and not os.path.exists(path):
             continue
         declared = os.path.normpath(path)
         resolved = os.path.realpath(declared)

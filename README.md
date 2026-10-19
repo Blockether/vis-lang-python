@@ -38,9 +38,9 @@ reaches the same interpreter, with its globals. Only `py.repl_stop` and the end 
 When Vis confines a session, its jail reads only the system directories, the workspace and granted
 paths. `vis-agent`, `uv`, Poetry or ruff under your home directory, for example in `~/.local/bin`,
 are outside them. The extension declares each of these programs on `PATH`, and the file that it
-links to, as a read-only grant. Vis checks the grants and gives them only to the extension's own
-processes, not to the agent. A Vis without toolchain grants gets no declaration. There, add the
-paths to `jail.filesystem` yourself.
+links to, as a read-only grant. It declares the uv, Poetry and pip caches as read-write grants, so a
+confined run reuses your downloads. Vis checks the grants and gives them only to the extension's own
+processes, not to the agent.
 ## Keep files parseable
 
 Edit hooks repair structural mistakes and validate syntax locally in Python.
@@ -70,7 +70,8 @@ It never accepts a repair without successful validation.
 
 ## Requirements
 
-`pytest` in the project you test. Everything else is installed with the extension.
+Vis 0.2.53 or later, for toolchain grants. `pytest` in the project you test. Everything else is
+installed with the extension.
 
 ## Development
 

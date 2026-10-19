@@ -3,8 +3,9 @@
 A jailed child can write only to its workspace and to Vis' own state directory.
 uv, Poetry and pip keep their downloads and managed interpreters outside both. A
 confined run would download everything again, into a directory that it may not
-be allowed to create. These are the exact directories that the extension grants
-on the call that starts a run. The jail still refuses everything else.
+be allowed to create. The extension declares these exact directories as
+read-write grants. Vis gives them only to this extension's own processes. The
+jail still refuses everything else.
 """
 
 from __future__ import annotations
@@ -47,20 +48,10 @@ def pip_cache() -> str:
     return _directory("PIP_CACHE_DIR", ".cache", "pip")
 
 
-def granted_paths(*extra: str) -> tuple[str, ...]:
-    """Paths outside the session that a Python run is handed.
-
-    Args:
-        extra: Further directories this one call needs, such as the private
-            directory a report is written to.
+def cache_paths() -> tuple[str, ...]:
+    """The directories that a confined Python run shares with the person's tools.
 
     Returns:
-        The directories to grant, as a tuple.
+        The uv cache, uv's interpreters, the Poetry cache and the pip cache.
     """
-    return (
-        uv_cache(),
-        uv_interpreters(),
-        poetry_cache(),
-        pip_cache(),
-        *(str(path) for path in extra),
-    )
+    return (uv_cache(), uv_interpreters(), poetry_cache(), pip_cache())

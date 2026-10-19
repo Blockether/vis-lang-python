@@ -31,8 +31,6 @@ from pathlib import Path
 from vis_lang_interface import RuntimeGone, process, runtime
 from vis_lang_interface.process import shell_call
 
-from vis_lang_python import caches
-
 DRIVER = r"""import sys, json, io, ast, contextlib, pprint, traceback
 
 _G = {'__name__': '__vis_repl__'}
@@ -334,7 +332,6 @@ def _probe(cmd: list[str], cwd: str, env: dict) -> dict:
             cwd=cwd,
             timeout_s=PROBE_TIMEOUT_S,
             env=env,
-            read_write=caches.granted_paths(),
         )
     except Exception as ex:
         return {"error": str(ex)}
@@ -556,9 +553,7 @@ def _kept(cwd: str) -> _Repl | None:
         # The next start replaces the lost interpreter.
         return None
     try:
-        live = runtime.start(
-            cmd, cwd=cwd, read_write=caches.granted_paths(), shell_id=sid
-        )
+        live = runtime.start(cmd, cwd=cwd, shell_id=sid)
     except Exception:
         return None
     if live.pid != shell.get("pid"):
@@ -648,7 +643,6 @@ def start(options=None) -> dict:
             cwd=cwd,
             env=_child_environment(options.get("env")),
             meeting=meeting,
-            read_write=caches.granted_paths(),
             shell_id=shell_id(cwd),
         )
     except BaseException:

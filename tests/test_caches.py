@@ -31,16 +31,9 @@ def test_a_machine_that_keeps_them_elsewhere_is_followed(monkeypatch):
     monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/srv/pythons")
     monkeypatch.setenv("POETRY_CACHE_DIR", "/srv/poetry")
     monkeypatch.setenv("PIP_CACHE_DIR", "/srv/pip")
-    assert caches.granted_paths() == (
+    assert caches.cache_paths() == (
         "/srv/uv",
         "/srv/pythons",
         "/srv/poetry",
         "/srv/pip",
     )
-
-
-def test_a_call_may_add_the_directory_it_writes_to(monkeypatch):
-    _without_overrides(monkeypatch)
-    granted = caches.granted_paths("/tmp/report-7")
-    assert granted[-1] == "/tmp/report-7"
-    assert caches.uv_cache() in granted

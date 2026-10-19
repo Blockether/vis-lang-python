@@ -64,19 +64,19 @@ def _declared(monkeypatch):
     return registered[0]
 
 
-def test_a_host_with_grants_receives_the_toolchain(tmp_path, monkeypatch):
+def test_the_toolchain_is_read_only_and_the_caches_are_writable(tmp_path, monkeypatch):
     tool = _program(tmp_path, "uv")
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setattr(
-        vis, "Grant", lambda path, *, reason: ("grant", path, reason), raising=False
-    )
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", str(tmp_path / "pythons"))
+    monkeypatch.setenv("POETRY_CACHE_DIR", str(tmp_path / "poetry"))
+    monkeypatch.setenv("PIP_CACHE_DIR", str(tmp_path / "pip"))
     grants = _declared(monkeypatch)["grants"]
-    assert [grant[1] for grant in grants] == [str(tool)]
-    assert all(grant[2] for grant in grants)
-
-
-def test_an_older_host_registers_without_grants(tmp_path, monkeypatch):
-    _program(tmp_path, "uv")
-    monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.delattr(vis, "Grant", raising=False)
-    assert "grants" not in _declared(monkeypatch)
+    assert [(str(grant.path), grant.mode) for grant in grants] == [
+        (str(tool), "read"),
+        (str(tmp_path / "uv-cache"), "read_write"),
+        (str(tmp_path / "pythons"), "read_write"),
+        (str(tmp_path / "poetry"), "read_write"),
+        (str(tmp_path / "pip"), "read_write"),
+    ]
+    assert all(grant.reason for grant in grants)

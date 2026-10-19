@@ -16,7 +16,6 @@ from pathlib import Path, PurePosixPath
 
 from vis_lang_interface import TestFailure, TestResult, process
 
-from vis_lang_python.caches import granted_paths
 from vis_lang_python.repl import detect_command, environment_hint
 
 OUTPUT_TAIL = 4000
@@ -58,8 +57,9 @@ def run(paths=(), *, root, keyword="", timeout_s=900, shared=False):
         ]
         if keyword:
             command += ["-k", keyword]
+        # The JUnit report is written outside the project, so the run needs that directory.
         done = process.run(
-            command, cwd=root, timeout_s=timeout_s, read_write=granted_paths(workspace)
+            command, cwd=root, timeout_s=timeout_s, read_write=(workspace,)
         )
         output = (done.out + done.err)[-OUTPUT_TAIL:]
         if not report.is_file():

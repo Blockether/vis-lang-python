@@ -1,22 +1,23 @@
 """Vis entrypoint. The tools themselves live in vis_lang_python."""
 
-from typing import Any, Literal
-
 import blockether.vis.extension as vis
 from vis_lang_interface import presentation, prompt
 from vis_lang_interface.syntax import SyntaxGuard
 
+from vis_lang_python.caches import cache_paths
 from vis_lang_python.repair import repair_source
-from vis_lang_python.toolchain import toolchain_paths
+from vis_lang_python.toolchain import grantable, toolchain_paths
 from vis_lang_python.tools import SYNTAX_SUFFIXES, PythonTools, _check_syntax
-
-# The tags that this extension binds. Older SDKs do not export `vis.SymbolTag`,
-# so this module keeps its own tag type.
-_Tag = Literal["observation", "mutation", "verification"]
 
 
 def _bind(
-    name, label, build, *, tag: _Tag = "observation", show_start=True, describe=None
+    name,
+    label,
+    build,
+    *,
+    tag: vis.SymbolTag = "observation",
+    show_start=True,
+    describe=None,
 ):
     """Attach one Activity presentation to a method of PythonTools."""
     setattr(
@@ -31,19 +32,6 @@ def _bind(
     )
 
 
-def _knows(tag: _Tag) -> bool:
-    """Whether this Vis host accepts `tag`. Older hosts refuse `verification`."""
-    try:
-        vis.method(tag=tag)
-    except ValueError:
-        return False
-    return True
-
-
-# Lint and test runs check work; a host that lacks the tag records them as reads.
-_CHECK: _Tag = "verification" if _knows("verification") else "observation"
-
-
 _bind(
     "format_code",
     "Format Python code",
@@ -55,13 +43,13 @@ _bind(
     "lint_code",
     "Lint Python code",
     lambda result: presentation.lint_presentation("Lint Python code", result),
-    tag=_CHECK,
+    tag="verification",
 )
 _bind(
     "run_tests",
     "Run Python tests",
     lambda result: presentation.test_presentation("Run Python tests", result),
-    tag=_CHECK,
+    tag="verification",
 )
 _bind(
     "repl_start",
@@ -124,18 +112,21 @@ PROMPT = prompt.routing(
 
 GUARD = SyntaxGuard("python", SYNTAX_SUFFIXES, _check_syntax, repair=repair_source)
 
-# Vis without `vis.Grant` cannot declare toolchain grants; the jail then needs its own rules.
-_GRANT = getattr(vis, "Grant", None)
-GRANTS = (
-    tuple(
-        _GRANT(path, reason="Run the Python toolchain for REPLs, tests and lint.")
+# Vis gives these paths only to this extension's own processes.
+GRANTS = [
+    *(
+        vis.Grant(path, reason="Run the Python toolchain for REPLs, tests and lint.")
         for path in toolchain_paths()
-    )
-    if _GRANT
-    else ()
-)
-# Keyword arguments for `vis.Extension`: an older Vis refuses an unknown `grants`.
-_TOOLCHAIN: dict[str, Any] = {"grants": GRANTS} if GRANTS else {}
+    ),
+    *(
+        vis.Grant(
+            path,
+            "read_write",
+            reason="Share the uv, Poetry and pip caches with the person's own tools.",
+        )
+        for path in grantable(cache_paths(), existing=False)
+    ),
+]
 
 
 vis.register_extension(
@@ -148,10 +139,7 @@ vis.register_extension(
             vis.Symbol(
                 PythonTools(
                     workspace_root=vis.workspace_root,
-                    # Vis without `vis.python_environment` has no shared setting.
-                    python_environment=getattr(
-                        vis, "python_environment", lambda: "project"
-                    ),
+                    python_environment=vis.python_environment,
                 ),
                 name="py",
             )
@@ -163,6 +151,6 @@ vis.register_extension(
             vis.OpHook(["patch", "python_execution"], GUARD.after_edit, phase="after"),
         ],
         ctx=GUARD.ctx,
-        **_TOOLCHAIN,
+        grants=GRANTS,
     )
 )

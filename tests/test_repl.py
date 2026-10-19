@@ -9,7 +9,7 @@ import time
 import pytest
 from vis_lang_interface.process import shell_call
 
-from vis_lang_python import caches, repl
+from vis_lang_python import repl
 from vis_lang_python.tools import PythonTools
 
 
@@ -126,7 +126,7 @@ def test_evaluating_without_a_repl_says_so(project):
         tools.repl_eval("1 + 1", cwd=cwd)
 
 
-def test_the_interpreter_is_handed_the_caches_it_downloads_into(tmp_path, monkeypatch):
+def test_the_interpreter_asks_for_no_grant_of_its_own(tmp_path, monkeypatch):
     seen = {}
 
     def fake_start(
@@ -145,8 +145,7 @@ def test_the_interpreter_is_handed_the_caches_it_downloads_into(tmp_path, monkey
     monkeypatch.setattr(repl.runtime, "start", fake_start)
     with pytest.raises(RuntimeError, match="not starting"):
         repl.start({"cwd": str(tmp_path)})
-    assert caches.uv_cache() in seen["read_write"]
-    assert caches.uv_interpreters() in seen["read_write"]
+    assert seen["read_write"] == []
 
 
 def test_a_long_value_comes_back_pretty_printed(project):

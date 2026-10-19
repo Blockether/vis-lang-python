@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from vis_lang_python import caches, pytest_tool
+from vis_lang_python import pytest_tool
 
 REPORT = """<?xml version="1.0" encoding="utf-8"?>
 <testsuites><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="0.4">
@@ -58,9 +58,7 @@ def test_selecting_tests_by_keyword(tmp_path):
     assert result.is_passed is True
 
 
-def test_a_run_asks_for_the_caches_and_the_directory_it_reports_into(
-    tmp_path, monkeypatch
-):
+def test_a_run_asks_only_for_the_directory_it_reports_into(tmp_path, monkeypatch):
     seen = {}
 
     def fake_run(command, *, cwd, timeout_s=300, stdin=None, env=None, read_write=()):
@@ -71,12 +69,9 @@ def test_a_run_asks_for_the_caches_and_the_directory_it_reports_into(
 
     monkeypatch.setattr(pytest_tool.process, "run", fake_run)
     pytest_tool.run(root=str(tmp_path))
-    granted = seen["read_write"]
-    assert caches.uv_cache() in granted
-    assert caches.uv_interpreters() in granted
     # The JUnit report is written outside the project, so the run is handed that
-    # directory too: confined without it, pytest has nowhere to write the report.
-    assert str(Path(seen["report"]).parent) in granted
+    # directory. The caches come from the grants that the extension declares.
+    assert seen["read_write"] == [str(Path(seen["report"]).parent)]
 
 
 def test_a_real_failure_is_named_with_its_class_and_located(tmp_path):
