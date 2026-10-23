@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.log
+
+# uv writes the lock locally; the extension pins its dependencies in pyproject.toml.
+uv.lock
