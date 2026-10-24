@@ -22,13 +22,14 @@ OUTPUT_TAIL = 4000
 INSTALL_HINT = "add pytest to the project, for example `uv add --dev pytest`."
 
 
-def run(paths=(), *, root, keyword="", timeout_s=900, shared=False):
+def run(paths=(), *, root, keyword="", max_failures=0, timeout_s=900, shared=False):
     """Run pytest in `root` and read its JUnit report.
 
     Args:
         paths: Test files or directories. Empty means pytest's own discovery.
         root: Project directory to run in.
         keyword: Value for pytest's `-k` selection, or an empty string.
+        max_failures: Stop after this many failures (`--maxfail`). 0 runs every test.
         timeout_s: Seconds before the run is abandoned.
         shared: Run with `vis-agent python --shared`, not the project environment.
 
@@ -39,7 +40,10 @@ def run(paths=(), *, root, keyword="", timeout_s=900, shared=False):
         ToolMissing: The project has no pytest.
         ToolTimeout: The run outlived `timeout_s`.
         RuntimeError: pytest could not start or wrote no report.
+        ValueError: max_failures is negative.
     """
+    if max_failures < 0:
+        raise ValueError("max_failures must be 0 or more")
     with tempfile.TemporaryDirectory() as workspace:
         report = Path(workspace) / "report.xml"
         command = [
@@ -57,6 +61,8 @@ def run(paths=(), *, root, keyword="", timeout_s=900, shared=False):
         ]
         if keyword:
             command += ["-k", keyword]
+        if max_failures:
+            command.append(f"--maxfail={max_failures}")
         # The JUnit report is written outside the project, so the run needs that directory.
         done = process.run(
             command, cwd=root, timeout_s=timeout_s, read_write=(workspace,)

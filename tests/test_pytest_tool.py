@@ -58,6 +58,22 @@ def test_selecting_tests_by_keyword(tmp_path):
     assert result.is_passed is True
 
 
+def test_a_run_stops_after_max_failures(tmp_path):
+    (tmp_path / "test_math.py").write_text(
+        "def test_bad_one():\n    assert 1 == 2\n\n\n"
+        "def test_bad_two():\n    assert 1 == 3\n\n\n"
+        "def test_ok():\n    assert 1 == 1\n"
+    )
+    result = pytest_tool.run(root=str(tmp_path), max_failures=1, timeout_s=120)
+    assert (result.total, result.failed) == (1, 1)
+    assert [failure.test for failure in result.failures] == ["test_bad_one"]
+
+
+def test_a_negative_max_failures_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="max_failures"):
+        pytest_tool.run(root=str(tmp_path), max_failures=-1, timeout_s=120)
+
+
 def test_a_run_asks_only_for_the_directory_it_reports_into(tmp_path, monkeypatch):
     seen = {}
 

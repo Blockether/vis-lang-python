@@ -246,6 +246,9 @@ class PythonTools:
         *,
         cwd: Annotated[str, "Project directory; inferred from paths when empty."] = "",
         keyword: Annotated[str, "Value for pytest's -k selection."] = "",
+        max_failures: Annotated[
+            int, "Stop after this many failures (pytest --maxfail); 0 runs every test."
+        ] = 0,
         timeout_s: Annotated[int, "Seconds before the run is abandoned."] = 900,
     ) -> TestResult:
         """Run pytest under the project's own interpreter, or the shared one.
@@ -259,6 +262,7 @@ class PythonTools:
             paths,
             root=self._root(cwd, paths),
             keyword=keyword,
+            max_failures=max_failures,
             timeout_s=timeout_s,
             shared=self._shared(),
         )
