@@ -100,6 +100,8 @@ PROMPT = prompt.routing(
         " code stops parsing.",
         "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
         " and `py.lint_code` run ruff.",
+        "`py.run_tests(coverage=True)` runs pytest under the project's coverage.py. Its result's"
+        " `coverage` lists each file's gaps: the lines and branches that never ran.",
         "Edit hooks repair structural mistakes in Python files locally and validate the result without"
         " execution. Before a patch writes, its repair stays in the changed lines. Unrepairable breaking"
         " patches write nothing.",
@@ -133,7 +135,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.14.0",
+        version="1.15.0",
         alias="py",
         symbols=[
             vis.Symbol(

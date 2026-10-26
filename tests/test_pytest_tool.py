@@ -161,3 +161,130 @@ def test_a_broken_virtualenv_names_both_fixes(tmp_path, monkeypatch):
         pytest_tool.run(root=str(tmp_path))
     assert "uv sync" in str(failure.value)
     assert "python: {environment: shared}" in str(failure.value)
+
+
+SOURCE = """def sign(x):
+    if x > 0:
+        return "positive"
+    print("negative")
+    return "negative"
+
+
+def never(y):
+    return y * 2
+"""
+
+COVERAGE = {
+    "files": {
+        "app/core.py": {
+            "executed_lines": [1, 2, 3, 8],
+            "missing_lines": [4, 5, 9],
+            "missing_branches": [[2, 4]],
+            "summary": {
+                "covered_lines": 4,
+                "num_statements": 7,
+                "covered_branches": 1,
+                "num_branches": 2,
+            },
+        },
+        "tests/test_core.py": {
+            "executed_lines": [1],
+            "missing_lines": [],
+            "summary": {"covered_lines": 1, "num_statements": 1},
+        },
+    }
+}
+
+
+def test_coverage_names_the_lines_and_branches_that_never_ran(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "core.py").write_text(SOURCE)
+    measured = pytest_tool.coverage_of(COVERAGE, str(tmp_path))
+    assert [f.path for f in measured.files] == ["app/core.py"]
+    assert (measured.unit, measured.covered, measured.total) == ("lines", 4, 7)
+    assert (measured.branches_covered, measured.branches_total) == (1, 2)
+    gaps = [(g.line, g.end_line, g.kind, g.detail) for g in measured.files[0].gaps]
+    assert gaps == [
+        (2, 2, "branch", "2 -> 4: if x > 0:"),
+        (4, 5, "line", 'print("negative")'),
+        (9, 9, "line", "return y * 2"),
+    ]
+
+
+def test_a_branch_out_of_the_function_names_the_exit(tmp_path):
+    report = {"files": {"a.py": {"executed_lines": [1], "missing_branches": [[1, -1]]}}}
+    gap = pytest_tool.coverage_of(report, str(tmp_path)).files[0].gaps[0]
+    assert (gap.kind, gap.detail) == ("branch", "1 -> exit: ")
+
+
+def test_a_coverage_run_measures_branches_and_writes_the_project_report(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_run(command, *, cwd, timeout_s=300, stdin=None, env=None, read_write=()):
+        calls.append((command, env))
+        if "json" in command:
+            Path(command[-1]).write_text(__import__("json").dumps(COVERAGE))
+        else:
+            Path(command[-1].split("=", 1)[1]).write_text(REPORT, encoding="utf-8")
+        return SimpleNamespace(out="", err="", duration_ms=1, exit_code=0)
+
+    monkeypatch.setattr(pytest_tool.process, "run", fake_run)
+    result = pytest_tool.run(root=str(tmp_path), coverage=True)
+    (tests, env), (written, _) = calls
+    assert tests[tests.index("-m") : tests.index("-m") + 6] == [
+        "-m",
+        "coverage",
+        "run",
+        "--branch",
+        "-m",
+        "pytest",
+    ]
+    assert env["COVERAGE_FILE"].endswith(".coverage")
+    assert written[-1] == str(tmp_path / "coverage.json")
+    assert result.total == 3
+    assert result.coverage.report == str(tmp_path / "coverage.json")
+    assert result.coverage.files[0].path == "app/core.py"
+
+
+def test_a_project_without_coverage_still_runs_its_tests(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(command, *, cwd, timeout_s=300, stdin=None, env=None, read_write=()):
+        calls.append(command)
+        if "coverage" in command:
+            return SimpleNamespace(
+                out="", err="No module named coverage", duration_ms=1, exit_code=1
+            )
+        Path(command[-1].split("=", 1)[1]).write_text(REPORT, encoding="utf-8")
+        return SimpleNamespace(out="", err="", duration_ms=1, exit_code=0)
+
+    monkeypatch.setattr(pytest_tool.process, "run", fake_run)
+    result = pytest_tool.run(root=str(tmp_path), coverage=True)
+    assert len(calls) == 2 and "coverage" not in calls[1]
+    assert (result.total, result.coverage) == (3, None)
+    assert "No coverage: coverage.py is not installed" in result.output
+
+
+def test_a_real_coverage_run_finds_the_branch_that_never_ran(tmp_path):
+    from vis_lang_python.repl import detect_command
+
+    python = detect_command(str(tmp_path))
+    check = __import__("subprocess").run([*python, "-c", "import coverage, pytest"])
+    if check.returncode:
+        pytest.skip("the project interpreter has no coverage.py or pytest")
+    (tmp_path / "app.py").write_text(SOURCE)
+    (tmp_path / "test_app.py").write_text(
+        "from app import sign\n\n\ndef test_sign():\n    assert sign(1) == 'positive'\n"
+    )
+    result = pytest_tool.run(root=str(tmp_path), coverage=True, timeout_s=120)
+    assert result.is_passed is True
+    (measured,) = result.coverage.files
+    assert measured.path == "app.py"
+    assert (measured.branches_covered, measured.branches_total) == (1, 2)
+    assert [(g.line, g.kind) for g in measured.gaps] == [
+        (2, "branch"),
+        (4, "line"),
+        (9, "line"),
+    ]

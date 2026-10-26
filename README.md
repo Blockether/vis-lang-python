@@ -19,6 +19,7 @@ py.format_code(["src"], is_written=True)     # ruff format
 py.lint_code(["src"])                        # ruff check, with rule codes
 py.run_tests(["tests"], keyword="repl")      # pytest, counted from its JUnit report
 py.run_tests(["tests"], max_failures=1)      # stop at the first failure
+py.run_tests(["tests"], coverage=True)       # + coverage.py lines, branches and gaps
 py.repl_start(cwd="~/app")                   # the project's own interpreter
 py.repl_eval("model = load()", cwd="~/app")  # globals live between calls
 py.repl_stop(cwd="~/app")

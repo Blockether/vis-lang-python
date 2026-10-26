@@ -249,11 +249,19 @@ class PythonTools:
         max_failures: Annotated[
             int, "Stop after this many failures (pytest --maxfail); 0 runs every test."
         ] = 0,
+        coverage: Annotated[
+            bool, "Also measure coverage: lines, branches and gaps (coverage.py)."
+        ] = False,
         timeout_s: Annotated[int, "Seconds before the run is abandoned."] = 900,
     ) -> TestResult:
         """Run pytest under the project's own interpreter, or the shared one.
 
-        Counts and failures come from the JUnit report pytest writes. Raises
+        Counts and failures come from the JUnit report pytest writes. With
+        coverage, pytest runs under the project's coverage.py with branches. The
+        result's coverage gives each file's covered lines and branches, and its
+        gaps: the lines and branches that never ran. The run writes
+        `coverage.json`, which `graphify crap` reads. Without coverage.py, the
+        tests still run and the output says why coverage is missing. Raises
         ToolMissing when the project has no pytest and ToolTimeout when the run
         outlives timeout_s.
         """
@@ -265,6 +273,7 @@ class PythonTools:
             max_failures=max_failures,
             timeout_s=timeout_s,
             shared=self._shared(),
+            coverage=coverage,
         )
 
     def repl_start(
