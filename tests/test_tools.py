@@ -60,6 +60,42 @@ def test_one_bare_path_is_one_path_for_every_file_tool(tmp_path, monkeypatch):
     }
 
 
+# Session bc998dd0-96cb-4d7f-8b64-b4bffeafc6f4: `clj.run_tests(path=..., var=...)`
+# failed with a TypeError for each singular. The Python tools took the same names.
+def test_tools_read_common_keyword_spellings_as_their_parameters(tmp_path, monkeypatch):
+    target = tmp_path / "app.py"
+    target.write_text("x = 1\n")
+    seen = {}
+
+    def remember(tag):
+        def call(first, root=None, **options):
+            seen[tag] = (first, options)
+            return tag
+
+        return call
+
+    monkeypatch.setattr(tools.ruff_tool, "check_files", remember("lint"))
+    monkeypatch.setattr(tools.ruff_tool, "format_source", remember("source"))
+    monkeypatch.setattr(tools.pytest_tool, "run", remember("test"))
+    language = cast(Any, tools.PythonTools())
+    assert language.lint_code(path=str(target), fix=True) == "lint"
+    assert language.format_code(code="x=1\n", cwd=str(tmp_path)) == "source"
+    assert language.run_tests(file=str(target), k="adds", maxfail=1) == "test"
+    assert seen["lint"] == ((target.resolve(),), {"is_fixed": True})
+    assert seen["source"] == ("x=1\n", {})
+    assert seen["test"][0] == (str(target),)
+    assert (seen["test"][1]["keyword"], seen["test"][1]["max_failures"]) == ("adds", 1)
+
+
+def test_a_keyword_named_twice_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.pytest_tool, "run", lambda *args, **options: "ran")
+    language = cast(Any, tools.PythonTools())
+    with pytest.raises(TypeError, match="keyword twice, as 'k' and as 'keyword'"):
+        language.run_tests(k="a", keyword="b", cwd=str(tmp_path))
+    with pytest.raises(TypeError, match="unexpected keyword argument 'select'"):
+        language.run_tests(select="a", cwd=str(tmp_path))
+
+
 def test_source_text_is_linted_without_files(tmp_path, monkeypatch):
     # Regression: lint_code took only paths, so linting a snippet failed with
     # TypeError while format_code and the Clojure tools accept source text.
