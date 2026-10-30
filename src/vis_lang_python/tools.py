@@ -8,13 +8,13 @@ from Vis.
 from __future__ import annotations
 
 import ast
-import functools
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, ParamSpec, TypeVar
+from typing import Annotated
 
 from vis_lang_interface import (
+    PATH_ALIASES,
     Diagnostic,
     FormatResult,
     LintResult,
@@ -22,6 +22,7 @@ from vis_lang_interface import (
     ReplSession,
     SyntaxResult,
     TestResult,
+    aliased,
     project_root,
     source_files,
     string_list,
@@ -46,41 +47,6 @@ def _absolute(path, workspace_root=Path.cwd):
     """Resolve a relative name in the current working copy, never a sampled root."""
     named = Path(path).expanduser()
     return named if named.is_absolute() else Path(workspace_root()) / named
-
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
-# The paths a caller names in a tool call: one file, a list or a directory.
-PATHS = {"path": "paths", "file": "paths", "files": "paths"}
-
-
-def _aliased(**spellings: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Accept each keyword in `spellings` as the canonical keyword that it names.
-
-    A caller types `path=` or `k=` for `paths=` and `keyword=`, and types it again
-    in the next call. A failed test run for a plural is not worth its cost. An
-    alias together with its canonical keyword names one value twice, so the call
-    is refused. An unknown keyword fails as Python reports it. The signature, and
-    so `doc()` and the tool contract, keep only the canonical names.
-    """
-
-    def wrap(fn: Callable[P, R]) -> Callable[P, R]:
-        @functools.wraps(fn)
-        def call(*args: P.args, **kwargs: P.kwargs) -> R:
-            for spelled in [name for name in kwargs if name in spellings]:
-                canonical = spellings[spelled]
-                if canonical in kwargs:
-                    raise TypeError(
-                        f"{fn.__qualname__}() got {canonical} twice, as '{spelled}'"
-                        f" and as '{canonical}'; pass one."
-                    )
-                kwargs[canonical] = kwargs.pop(spelled)
-            return fn(*args, **kwargs)
-
-        return call
-
-    return wrap
 
 
 def _root(cwd, paths=(), workspace_root=Path.cwd):
@@ -222,7 +188,7 @@ class PythonTools:
     def _root(self, cwd, paths=()):
         return _root(cwd, paths, self._workspace_root)
 
-    @_aliased(**PATHS, code="source", write="is_written", written="is_written")
+    @aliased(**PATH_ALIASES, code="source", write="is_written", written="is_written")
     def format_code(
         self,
         paths: Annotated[Sequence[str], "Files or directories to format."] = (),
@@ -247,7 +213,7 @@ class PythonTools:
             raise ValueError("no Python file in the given paths")
         return ruff_tool.format_files(files, root, is_written=is_written)
 
-    @_aliased(**PATHS, code="source", fix="is_fixed", fixed="is_fixed")
+    @aliased(**PATH_ALIASES, code="source", fix="is_fixed", fixed="is_fixed")
     def lint_code(
         self,
         paths: Annotated[Sequence[str], "Files or directories to lint."] = (),
@@ -276,8 +242,8 @@ class PythonTools:
             raise ValueError("no Python file in the given paths")
         return ruff_tool.check_files(files, root, is_fixed=is_fixed)
 
-    @_aliased(
-        **PATHS,
+    @aliased(
+        **PATH_ALIASES,
         k="keyword",
         keywords="keyword",
         maxfail="max_failures",
