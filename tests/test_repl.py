@@ -113,6 +113,72 @@ def test_a_repl_outlives_a_sandbox_restart(project):
     assert tools.repl_status(cwd=cwd).detail == "not running"
 
 
+# Blockether/vis#440: a timeout only stopped the wait. The code kept running,
+# and every later eval timed out behind it while repl_status said "running".
+def test_a_timed_out_eval_is_interrupted_and_the_repl_answers_again(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    tools.repl_eval("kept = 41", cwd=cwd)
+    with pytest.raises(repl.ReplError, match="interrupted"):
+        tools.repl_eval("import time; time.sleep(30)", cwd=cwd, timeout_ms=1000)
+    began = time.monotonic()
+    assert tools.repl_eval("kept + 1", cwd=cwd, timeout_ms=5000).value == "42"
+    assert time.monotonic() - began < 3
+    assert tools.repl_status(cwd=cwd).detail == "running"
+
+
+# Blockether/vis#440: code that does not stop on KeyboardInterrupt kept the REPL
+# busy with no sign, and the next eval queued behind it.
+def test_code_that_ignores_the_interrupt_leaves_the_repl_busy(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    code = "import signal, time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\ntime.sleep(8)"
+    with pytest.raises(repl.ReplError, match="did not stop"):
+        tools.repl_eval(code, cwd=cwd, timeout_ms=1000)
+    assert "busy" in tools.repl_status(cwd=cwd).detail
+    with pytest.raises(repl.ReplError, match="busy"):
+        tools.repl_eval("ran = True", cwd=cwd, timeout_ms=1000)
+    time.sleep(5)
+    assert "NameError" in tools.repl_eval("ran", cwd=cwd).error
+
+
+# Blockether/vis#440: a thread that rebinds sys.stdout across an eval left a
+# stale capture there, and the driver wrote every later answer into it.
+def test_a_stdout_rebind_in_a_thread_cannot_take_the_protocol_channel(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    code = (
+        "import threading, time, io, contextlib\n"
+        "def _g():\n"
+        "    with contextlib.redirect_stdout(io.StringIO()):\n"
+        "        time.sleep(0.5)\n"
+        "threading.Thread(target=_g).start()\n"
+        "'started'"
+    )
+    assert tools.repl_eval(code, cwd=cwd).value == "'started'"
+    time.sleep(1.5)
+    assert tools.repl_eval("5 + 5", cwd=cwd, timeout_ms=5000).value == "10"
+    assert tools.repl_eval("print('hi')", cwd=cwd).output.strip() == "hi"
+
+
+def test_reading_stdin_in_an_eval_does_not_take_the_requests(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    answer = tools.repl_eval("input()", cwd=cwd, timeout_ms=5000)
+    assert "EOFError" in answer.error
+    assert tools.repl_eval("2 + 2", cwd=cwd, timeout_ms=5000).value == "4"
+
+
+# Blockether/vis#440: CLI main() functions call sys.stdout.reconfigure(), which a
+# StringIO capture does not have.
+def test_an_eval_can_reconfigure_its_stdout(project):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    code = "import sys\nsys.stdout.reconfigure(line_buffering=True)\nprint('x')"
+    answer = tools.repl_eval(code, cwd=cwd)
+    assert (answer.output.strip(), answer.error) == ("x", "")
+
+
 def test_stopping_without_a_repl_is_safe(project):
     tools, cwd = project
     stopped = tools.repl_stop(cwd=cwd)

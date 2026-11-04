@@ -93,13 +93,16 @@ def _session(language, answer):
     happened = answer.get("result", "")
     if happened == "status":
         happened = "running" if is_running else "not running"
+    detail = [happened.replace("-", " ")]
+    if answer.get("busy"):
+        detail += ["busy", str(answer.get("message") or "")]
     return ReplSession(
         language,
         repl.abbreviate_home(answer["cwd"]),
         answer["cwd"],
         tuple(answer.get("cmd") or ()),
         is_running,
-        happened.replace("-", " "),
+        " · ".join(part for part in detail if part),
     )
 
 
@@ -331,9 +334,12 @@ class PythonTools:
         pprint when it is long. The result also carries anything the code
         printed, and the code as ruff formats it. Start the REPL first.
         Evaluating without one raises ReplError, and so does an evaluation that
-        takes longer than timeout_ms. Code that does not parse runs nothing. A
-        safe repair, such as a missing closer, is evaluated instead and listed
-        in `repairs`. Without one, the error says where the code stops parsing.
+        takes longer than timeout_ms. A timeout interrupts the code with
+        KeyboardInterrupt. Code that does not stop keeps the REPL busy:
+        repl_status says so, and the next eval raises without running. Code
+        that does not parse runs nothing. A safe repair, such as a missing
+        closer, is evaluated instead and listed in `repairs`. Without one, the
+        error says where the code stops parsing.
         """
         directory = str(self._absolute(cwd))
         started = time.monotonic()

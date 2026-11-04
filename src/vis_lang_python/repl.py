@@ -31,9 +31,88 @@ from pathlib import Path
 from vis_lang_interface import RuntimeGone, process, runtime
 from vis_lang_interface.process import shell_call
 
-DRIVER = r"""import sys, json, io, ast, contextlib, pprint, traceback
+DRIVER = r"""import sys, os, json, io, ast, signal, threading, contextlib, pprint, traceback
 
 _G = {'__name__': '__vis_repl__'}
+
+# The protocol gets its own copies of the two channels. User code never reaches
+# them: its stdin reads nothing, and its stdout goes to the log on stderr. A
+# rebound or closed sys.stdout cannot swallow an answer (Blockether/vis#440).
+_REQUESTS = os.fdopen(os.dup(0), 'r', encoding='utf-8')
+_ANSWERS = os.fdopen(os.dup(1), 'w', encoding='utf-8')
+_null = os.open(os.devnull, os.O_RDONLY)
+os.dup2(_null, 0)
+os.close(_null)
+os.dup2(2, 1)
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
+_busy = [False]
+_gate = threading.Lock()
+_EVAL_THREAD = threading.get_ident()
+
+
+def _on_sigint(signum, frame):
+    # Only an eval stops. A signal that arrives between requests is dropped.
+    if _busy[0]:
+        raise KeyboardInterrupt
+
+
+try:
+    # Only the main thread can take signals. There SIGINT also wakes a blocking
+    # call such as time.sleep.
+    signal.signal(signal.SIGINT, _on_sigint)
+    _BY_SIGNAL = True
+except ValueError:
+    # `vis-agent python --shared` runs this file on another thread. There an
+    # asynchronous exception stops Python code, but not a blocking C call.
+    _BY_SIGNAL = False
+
+
+def _stop_eval():
+    with _gate:
+        if not _busy[0]:
+            return
+        if _BY_SIGNAL:
+            signal.pthread_kill(_EVAL_THREAD, signal.SIGINT)
+        else:
+            import ctypes
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_ulong(_EVAL_THREAD), ctypes.py_object(KeyboardInterrupt))
+
+
+def _watch(path):
+    # One byte on the interrupt FIFO asks to stop the running eval.
+    fd = os.open(path, os.O_RDWR)
+    while os.read(fd, 1):
+        _stop_eval()
+
+
+try:
+    _STOP = os.path.join(os.path.dirname(__file__), 'interrupt')
+    if not os.path.exists(_STOP):
+        os.mkfifo(_STOP)
+    threading.Thread(target=_watch, args=(_STOP,), name='vis-repl-interrupt',
+                     daemon=True).start()
+except OSError:
+    # Without the FIFO a timeout cannot stop the code; the host reports it busy.
+    pass
+
+
+class _Capture(io.TextIOWrapper):
+    # A real text stream, so code can call reconfigure() or write to .buffer.
+    def __init__(self):
+        super().__init__(io.BytesIO(), encoding='utf-8',
+                         errors='backslashreplace', write_through=True)
+
+    def getvalue(self):
+        try:
+            self.flush()
+            return self.buffer.getvalue().decode('utf-8', 'replace')
+        except ValueError:
+            return ''
 
 
 def _repr(value):
@@ -100,8 +179,8 @@ def _compiled(code):
 
 
 def _run(code):
-    out = io.StringIO()
-    err = io.StringIO()
+    out = _Capture()
+    err = _Capture()
     value = None
     ok = True
     exc = None
@@ -117,10 +196,15 @@ def _run(code):
                 syntax = {'line': e.lineno or 0, 'column': e.offset or 0,
                           'message': e.msg}
                 raise
-            exec(pre, _G)
-            if last is not None:
-                has_value = True
-                value = eval(last, _G)
+            _busy[0] = True
+            try:
+                exec(pre, _G)
+                if last is not None:
+                    has_value = True
+                    value = eval(last, _G)
+            finally:
+                with _gate:
+                    _busy[0] = False
     except BaseException as e:
         ok = False
         if syntax is None:
@@ -142,26 +226,39 @@ def _run(code):
             'syntax': syntax}
 
 
+def _answer(res):
+    _ANSWERS.write(json.dumps(res) + '\n')
+    _ANSWERS.flush()
+
+
+def _serve(line):
+    line = line.strip()
+    if not line:
+        return
+    try:
+        req = json.loads(line)
+    except Exception:
+        _answer({'ok': False, 'exc': 'bad request'})
+        return
+    res = {'ok': True, 'pong': True} if req.get('op') == 'ping' else _run(req.get('code', ''))
+    if 'id' in req:
+        res['id'] = req['id']
+    _answer(res)
+
+
 def _main():
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    for line in _REQUESTS:
         try:
-            req = json.loads(line)
-        except Exception:
-            sys.stdout.write(json.dumps({'ok': False, 'exc': 'bad request'}) + '\n')
-            sys.stdout.flush()
-            continue
-        res = {'ok': True, 'pong': True} if req.get('op') == 'ping' else _run(req.get('code', ''))
-        if 'id' in req:
-            res['id'] = req['id']
-        sys.stdout.write(json.dumps(res) + '\n')
-        sys.stdout.flush()
+            _serve(line)
+        except KeyboardInterrupt:
+            # A late interrupt for an eval that already ended. The REPL lives on.
+            pass
 
 
 _main()
 """
+
+BUSY = "The REPL is busy: code from an earlier eval still runs in it."
 
 STDERR_TAIL_LINES = 40
 """How many of the child's last stderr lines a failed start hands back."""
@@ -191,6 +288,12 @@ LAUNCHERS = ("uv", "poetry", "vis-agent")
 STARTUP_POLL_S = 0.25
 """How often a start looks at the child while it waits for the ping answer."""
 DEFAULT_EVAL_TIMEOUT_S = 30.0
+
+INTERRUPT_GRACE_S = 2.0
+"""How long interrupted code may take to stop before the REPL counts as busy."""
+
+ANSWER_CHECK_S = 1.0
+"""How long an idle driver may take to answer a ping."""
 
 PROBE_TIMEOUT_S = 60
 """Seconds the check run after a silent failed start can take."""
@@ -353,14 +456,22 @@ class ReplError(RuntimeError):
     """A REPL call that cannot be served — down, timed out, or dead."""
 
 
+class ReplTimeout(ReplError):
+    """A request whose answer did not come within its budget."""
+
+
 class _Repl:
     """One interpreter runtime and the framed conversation with it."""
 
-    def __init__(self, live, cwd: str, cmd: list[str], env_fingerprint):
+    def __init__(self, live, cwd: str, cmd: list[str], env_fingerprint, place=None):
         self.live = live
         self.cwd = cwd
         self.cmd = cmd
         self.env_fingerprint = dict(env_fingerprint or {})
+        # The rendezvous directory, which holds the driver's interrupt FIFO.
+        self.place = place
+        # True while code that ignored an interrupt can still hold the driver.
+        self.stuck = False
         self.started_at = time.time()
         # A kept interpreter can still hold answers to an earlier Python
         # process's calls, so every id carries a prefix of this object's own.
@@ -423,9 +534,61 @@ class _Repl:
                 f"py.repl_start(). ({ex})"
             ) from ex
         except TimeoutError:
-            raise ReplError(
+            raise ReplTimeout(
                 f"Python eval timed out after {int(timeout_s * 1000)}ms"
             ) from None
+
+    def interrupt(self) -> bool:
+        """Ask the driver to raise KeyboardInterrupt in its running eval."""
+        if not self.place:
+            return False
+        try:
+            fd = os.open(
+                os.path.join(self.place, "interrupt"), os.O_WRONLY | os.O_NONBLOCK
+            )
+        except OSError:
+            return False
+        try:
+            os.write(fd, b"!")
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+        return True
+
+    def answers(self, timeout_s: float) -> bool:
+        """Whether the driver answers a ping within `timeout_s`, so no code holds it."""
+        if not self.lock.acquire(timeout=timeout_s):
+            # Another call of this process evaluates right now.
+            return False
+        try:
+            wanted = f"{self.prefix}-{next(self.ids)}"
+            pong = self.live.request(
+                {"op": "ping", "id": wanted}, timeout_s, wants=wanted
+            )
+        except (RuntimeGone, TimeoutError):
+            return False
+        finally:
+            self.lock.release()
+        is_idle = pong.get("pong") is True
+        if is_idle:
+            self.stuck = False
+        return is_idle
+
+    def timed_out(self, timeout_s: float) -> str:
+        """Interrupt the code of a timed-out eval, and say whether it stopped."""
+        said = f"Python eval timed out after {int(timeout_s * 1000)}ms"
+        if self.interrupt() and self.answers(INTERRUPT_GRACE_S):
+            return (
+                f"{said}. The code was interrupted with KeyboardInterrupt. The REPL "
+                "answers again, and the changes the code made before it stopped stay."
+            )
+        self.stuck = True
+        return (
+            f"{said}, and the code did not stop on KeyboardInterrupt. It can wait in "
+            "a C call or catch the interrupt. The REPL is busy until the code ends. "
+            "Call py.repl_stop() to end it, and lose its globals."
+        )
 
     def kill(self) -> None:
         self.live.stop()
@@ -561,7 +724,10 @@ def _kept(cwd: str) -> _Repl | None:
         # its driver. That one is not the user's REPL.
         live.stop()
         return None
-    return _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")))
+    kept = _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")), place)
+    # An earlier process may have left code running in it.
+    kept.stuck = True
+    return kept
 
 
 def _live(cwd: str) -> _Repl | None:
@@ -604,7 +770,11 @@ def _status(cwd: str, repl: _Repl | None) -> dict:
 def status(options=None) -> dict:
     options = options or {}
     cwd = _project_dir(options)
-    answer = _status(cwd, _live(cwd))
+    repl = _live(cwd)
+    answer = _status(cwd, repl)
+    if repl is not None and not repl.answers(ANSWER_CHECK_S):
+        answer["busy"] = True
+        answer["message"] = BUSY
     answer["id"] = _repl_id(options, cwd)
     return answer
 
@@ -648,7 +818,7 @@ def start(options=None) -> dict:
     except BaseException:
         meeting.close()
         raise
-    repl = _Repl(live, cwd, cmd, options.get("env_fingerprint"))
+    repl = _Repl(live, cwd, cmd, options.get("env_fingerprint"), meeting.path)
     try:
         pong = _await_startup(repl)
         if pong.get("pong") is not True:
@@ -735,7 +905,13 @@ def evaluate(options) -> dict:
         )
     timeout_ms = options.get("timeout_ms")
     timeout_s = (float(timeout_ms) / 1000.0) if timeout_ms else DEFAULT_EVAL_TIMEOUT_S
-    answer = repl.request({"code": _text(code)}, timeout_s)
+    if repl.stuck and not repl.answers(ANSWER_CHECK_S):
+        # Code sent now would run late, after the old code ends.
+        raise ReplError(BUSY + " The code was not sent. Call py.repl_stop() to end it.")
+    try:
+        answer = repl.request({"code": _text(code)}, timeout_s)
+    except ReplTimeout:
+        raise ReplError(repl.timed_out(timeout_s)) from None
     answer["code"] = _text(code)
     return answer
 
