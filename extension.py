@@ -100,6 +100,7 @@ PROMPT = prompt.routing(
         "`py.run_tests(coverage=True)` runs pytest under the project's coverage.py. Its result's"
         " `coverage` lists each file's gaps: the lines and branches that never ran.",
     ),
+    tools=PythonTools,
 )
 
 GUARD = SyntaxGuard("python", SYNTAX_SUFFIXES, _check_syntax, repair=repair_source)
