@@ -126,7 +126,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.16.5",
+        version="1.16.6",
         alias="py",
         symbols=[
             vis.Symbol(
