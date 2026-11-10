@@ -6,6 +6,7 @@ import shutil
 import threading
 import time
 
+import blockether.vis.extension as vis
 import pytest
 from vis_lang_interface.process import shell_call
 
@@ -93,6 +94,28 @@ def test_a_second_start_keeps_the_live_repl(project):
     assert tools.repl_eval("kept", cwd=cwd).value == "7"
 
 
+def test_a_start_gives_the_interpreter_the_variables_of_an_op_hook(
+    project, monkeypatch
+):
+    tools, cwd = project
+    monkeypatch.setattr(
+        vis, "call_env", lambda: {"VIS_HOOK_PROBE": "on"}, raising=False
+    )
+    tools.repl_start(cwd=cwd)
+    seen = tools.repl_eval("import os\nos.environ.get('VIS_HOOK_PROBE')", cwd=cwd)
+    assert seen.value == "'on'"
+    assert tools.repl_start(cwd=cwd).detail == "already running"
+    # A REPL IS its environment: another value is refused by name, never shown.
+    monkeypatch.setattr(
+        vis, "call_env", lambda: {"VIS_HOOK_PROBE": "off"}, raising=False
+    )
+    with pytest.raises(
+        RuntimeError, match="different env \\(VIS_HOOK_PROBE\\)"
+    ) as refused:
+        tools.repl_start(cwd=cwd)
+    assert "off" not in str(refused.value)
+
+
 def test_a_repl_outlives_a_sandbox_restart(project):
     # A sandbox restart ended the Python process, and with it the interpreter
     # and its globals. Now the next process attaches to the same interpreter.
@@ -106,7 +129,7 @@ def test_a_repl_outlives_a_sandbox_restart(project):
     assert status["env"] == {"TOKEN": "sha256:ab"}
     assert tools.repl_eval("kept + 1", cwd=cwd).value == "42"
     repl.detach_all()
-    again = repl.start({"cwd": cwd})
+    again = repl.start({"cwd": cwd, "env_fingerprint": {"TOKEN": "sha256:ab"}})
     assert (again["result"], again["pid"]) == ("already-running", first["pid"])
     repl.detach_all()
     assert tools.repl_stop(cwd=cwd).detail == "stopped"

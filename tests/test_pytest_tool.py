@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import blockether.vis.extension as vis
 import pytest
 
 from vis_lang_python import pytest_tool
@@ -47,6 +48,18 @@ def test_running_a_real_project(tmp_path):
     assert (result.total, result.passed, result.failed) == (2, 1, 1)
     assert result.failures[0].test == "test_bad"
     assert result.is_passed is False
+
+
+def test_the_tests_see_the_variables_of_an_op_hook(tmp_path, monkeypatch):
+    added = {"VIS_HOOK_PROBE": "from-hook"}
+    monkeypatch.setattr(vis, "call_env", lambda: added, raising=False)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
+    (tmp_path / "test_env.py").write_text(
+        "import os\n\n\ndef test_env():\n"
+        "    assert os.environ.get('VIS_HOOK_PROBE') == 'from-hook'\n"
+    )
+    result = pytest_tool.run(root=str(tmp_path), timeout_s=120)
+    assert (result.total, result.passed) == (1, 1)
 
 
 def test_selecting_tests_by_keyword(tmp_path):

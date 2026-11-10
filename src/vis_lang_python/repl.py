@@ -794,8 +794,24 @@ def start(options=None) -> dict:
     live = _live(cwd)
     if live:
         answer = _status(cwd, live)
-        answer["result"] = "already-running"
         answer["id"] = repl_id
+        # A REPL IS its environment: reusing one started with other variables would
+        # report success for a process that never saw the ones this start asked for.
+        wanted = dict(options.get("env_fingerprint") or {})
+        differing = sorted(
+            name
+            for name in {*live.env_fingerprint, *wanted}
+            if live.env_fingerprint.get(name) != wanted.get(name)
+        )
+        if differing:
+            answer["result"] = "failed"
+            answer["message"] = (
+                f"repl_start for {repl_id} is already running with a different env"
+                f" ({', '.join(differing)}). There is no restart: repl_stop that REPL,"
+                " then start it with this env."
+            )
+            return answer
+        answer["result"] = "already-running"
         return answer
 
     meeting = runtime.Rendezvous("python").open()

@@ -23,6 +23,8 @@ from vis_lang_interface import (
     SyntaxResult,
     TestResult,
     aliased,
+    call_env,
+    env_fingerprint,
     project_root,
     source_files,
     string_list,
@@ -277,7 +279,8 @@ class PythonTools:
         `coverage.json`, which `graphify crap` reads. Without coverage.py, the
         tests still run and the output says why coverage is missing. Raises
         ToolMissing when the project has no pytest and ToolTimeout when the run
-        outlives timeout_s.
+        outlives timeout_s. The tests get the variables that a `before` op hook on
+        `py.run_tests` adds with `vis.with_env`.
         """
         paths = string_list(paths)
         return pytest_tool.run(
@@ -299,10 +302,17 @@ class PythonTools:
         The project's own interpreter is used: uv, Poetry, a local virtualenv or
         python3, in that order. When the project's python.environment is shared,
         vis-agent python --shared is used. A live REPL is never replaced, because its
-        globals are the work. Raises RuntimeError when the interpreter fails its
-        startup handshake.
+        globals are the work. The interpreter gets the variables that a `before` op
+        hook on `py.repl_start` adds with `vis.with_env`; a live REPL that runs with
+        other variables is refused. Raises
+        RuntimeError when the interpreter fails its startup handshake.
         """
-        answer = repl.start({"cwd": str(self._absolute(cwd)), "shared": self._shared()})
+        options = {"cwd": str(self._absolute(cwd)), "shared": self._shared()}
+        env = call_env()
+        if env:
+            options["env"] = env
+            options["env_fingerprint"] = env_fingerprint(env)
+        answer = repl.start(options)
         if answer.get("result") == "failed":
             raise RuntimeError(_start_failure(answer))
         return _session("python", answer)
