@@ -77,9 +77,9 @@ When a broken `.venv` stops pytest or the REPL, the error names both fixes.
   keeps it. When `pip` cannot be added, the start continues and the `detail` says so. An exact
   `uv sync` that you run removes this `pip`; the next start adds it again.
 - In a shared REPL, Vis makes `sys.executable` an environment of its shared packages, so
-  `python -m pip install` there installs into them. A Vis older than this installs into its own
-  Python runtime: run `vis-agent update`. To change or remove a shared package, use
-  `vis-agent python --shared uv pip install` or `uninstall`.
+  `python -m pip install` and `python -m pip uninstall` there change them. An older Vis installs
+  into its own Python runtime, or cannot replace and remove a shared package: run
+  `vis-agent update`.
 
 The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
 reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.
