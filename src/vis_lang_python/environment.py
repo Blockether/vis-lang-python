@@ -48,6 +48,11 @@ HASHED_BYTES = 4 * 1024 * 1024
 PRINT_EXECUTABLE = "import sys; print(sys.executable)"
 NO_INSTALLER = "found no Vis, and uv is not on PATH"
 REMADE = "the `.venv` had no interpreter, so uv made it again"
+ENSURE_PIP = ("-m", "ensurepip", "--default-pip")
+NO_PIP = "pip was not added"
+OFFLINE = "UV_OFFLINE is set, so uv asked no index"
+CHANGES_SHOWN = 8
+"""How many changed packages the result of an upgrade names."""
 STALE = (
     "the project's dependency files changed after this REPL started, or their"
     " installation failed. Call py.repl_stop(), then py.repl_start() to install"
@@ -68,9 +73,10 @@ LOCAL_REQUIREMENT = re.compile(
 class Sync:
     """What one start did about the project's dependencies.
 
-    `state` is `installed`, `current` (nothing changed since the last
-    installation), `none` (the project declares nothing to install), `skipped`
-    (no installer) or `failed`.
+    `state` is `installed`, `upgraded` (installed with the newest versions that
+    the files allow), `current` (nothing changed since the last installation),
+    `none` (the project declares nothing to install), `skipped` (no installer)
+    or `failed`.
     """
 
     state: str
@@ -82,6 +88,8 @@ class Sync:
     reason: str = ""
     note: str = ""
     """What the installer did besides the installation, for the person."""
+    changes: tuple[str, ...] = ()
+    """The packages whose version an upgrade changed, as `name old -> new`."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -340,6 +348,41 @@ def _state(python: tuple[str, ...], shared: bool) -> str:
     )
 
 
+def _versions(python: tuple[str, ...], shared: bool) -> dict[str, str]:
+    """The version of each distribution in the environment that `python` runs
+    in. Empty when no environment is there."""
+    if shared:
+        directories = [shared_packages()]
+    elif len(python) == 1:
+        home = Path(python[0]).parent.parent
+        directories = sorted(home.glob("lib/python*/site-packages"))
+    else:
+        directories = []
+    found: dict[str, str] = {}
+    for directory in directories:
+        for name in _distributions(directory) or ():
+            distribution, dash, version = name.rpartition(".")[0].rpartition("-")
+            if dash and name.endswith(".dist-info"):
+                found[distribution] = version
+    return found
+
+
+def _changes(before: dict[str, str], after: dict[str, str]) -> tuple[str, ...]:
+    """What an upgrade changed. uv exits with status 0 also when it found
+    nothing newer, and when `UV_OFFLINE` kept it from the index."""
+    return tuple(
+        f"{name} {before[name]} -> {version}" if name in before else f"{name} {version}"
+        for name, version in sorted(after.items())
+        if before.get(name) != version
+    )
+
+
+def _is_offline(env) -> bool:
+    """Whether the installer runs with `UV_OFFLINE`."""
+    value = {**os.environ, **(env or {})}.get("UV_OFFLINE")
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _is_usable(python: tuple[str, ...]) -> bool:
     return bool(python) and os.path.isfile(python[0]) and os.access(python[0], os.X_OK)
 
@@ -390,39 +433,78 @@ def _tail(done: process.ToolRun) -> tuple[str, ...]:
 
 
 def _steps(
-    root: Path, plan: _Plan, shared: bool
-) -> tuple[list[tuple[str, ...]], tuple[str, ...]]:
-    """The installer commands for `plan`, and the interpreter they prepare. The
-    interpreter is empty when the last command prints it."""
+    root: Path, plan: _Plan, shared: bool, upgrade: bool = False
+) -> tuple[list[tuple[str, ...]], tuple[str, ...], bool]:
+    """The installer commands for `plan`, the interpreter they prepare, and
+    whether the first command makes the `.venv`. The interpreter is empty when
+    the last command prints it. With `upgrade`, uv takes the newest versions
+    that the files allow, and not the ones that are installed or locked."""
     uv = plan.uv
+    newest = ("--upgrade",) if upgrade else ()
     if shared:
         launcher = uv[:-1]
         if plan.kind == "requirements":
-            return [(*uv, "pip", "install", "-r", "requirements.txt")], launcher
+            install = (*uv, "pip", "install", *newest, "-r", "requirements.txt")
+            return [install], launcher, False
         if plan.sources:
             # `uv sync` would write a `uv.lock` into a project that uv does not own.
-            return [(*uv, "pip", "install", *plan.sources)], launcher
-        return [(*uv, "sync")], launcher
+            return [(*uv, "pip", "install", *newest, *plan.sources)], launcher, False
+        # Vis refuses `uv sync --upgrade` for shared packages, so the lock is
+        # upgraded first.
+        lock = [(*uv, "lock", "--upgrade")] if upgrade else []
+        return [*lock, (*uv, "sync")], launcher, False
     if plan.kind == "pyproject":
         python = venv_python(root) if plan.sources else None
         if python:
             # The person made this environment and uv does not own the project.
             # `uv run` would lock the project, make a `.venv` next to a `venv`,
             # and make a `.venv` again when its Python does not fit.
-            install = (*uv, "pip", "install", "--python", python, *plan.sources)
-            return [install], (python,)
+            install = (
+                *uv,
+                "pip",
+                "install",
+                *newest,
+                "--python",
+                python,
+                *plan.sources,
+            )
+            return [install], (python,), False
         # `uv run` installs like `uv sync --inexact`: packages that the person
         # added by hand stay. It then names the interpreter of the environment,
         # which can be the one of a workspace root.
-        return [(*uv, "run", "python", "-c", PRINT_EXECUTABLE)], ()
+        return [(*uv, "run", *newest, "python", "-c", PRINT_EXECUTABLE)], (), False
     steps: list[tuple[str, ...]] = []
     python = venv_python(root)
-    if python is None:
+    makes_venv = python is None
+    if makes_venv:
         # Without `--clear`, uv asks a question when a broken `.venv` exists.
         steps.append((*uv, "venv", "--clear", ".venv"))
         python = str(root / ".venv" / "bin" / "python")
-    steps.append((*uv, "pip", "install", "--python", python, "-r", "requirements.txt"))
-    return steps, (python,)
+    steps.append(
+        (*uv, "pip", "install", *newest, "--python", python, "-r", "requirements.txt")
+    )
+    return steps, (python,), makes_venv
+
+
+def _add_pip(python: tuple[str, ...], root: Path, env, timeout_s) -> str:
+    """Give a virtualenv without pip the pip of its own Python, so that
+    `python -m pip install` works in the REPL. That pip needs no index; the
+    seed of uv does. Returns what to tell the person when it fails, else ""."""
+    if len(python) != 1:
+        return ""
+    home = Path(python[0]).parent.parent
+    if not (home / "pyvenv.cfg").is_file():
+        return ""
+    for packages in home.glob("lib/python*/site-packages"):
+        if any(name.startswith("pip-") for name in _distributions(packages) or ()):
+            return ""
+    try:
+        done = _run((python[0], *ENSURE_PIP), root, env, timeout_s)
+    except Exception as ex:
+        return f"{NO_PIP}: {ex}"
+    if done.is_ok:
+        return ""
+    return f"{NO_PIP}: `python -m ensurepip` exited with status {done.exit_code}"
 
 
 def _existing(
@@ -443,13 +525,20 @@ def _existing(
 
 
 def prepare(
-    cwd: str, *, shared: bool = False, env=None, timeout_s=SYNC_TIMEOUT_S
+    cwd: str,
+    *,
+    shared: bool = False,
+    upgrade: bool = False,
+    env=None,
+    timeout_s=SYNC_TIMEOUT_S,
 ) -> Environment:
     """Install what the project in `cwd` declares, when it is not installed yet.
 
     Args:
         cwd: The project directory.
         shared: Install into Vis shared packages, not into a project `.venv`.
+        upgrade: Install the newest versions that the files allow, also when
+            nothing changed.
         env: Variables for the installer, over the ones it inherits.
         timeout_s: Seconds one installer command can take.
 
@@ -469,7 +558,8 @@ def prepare(
     stamp = _read_stamp(stamp_file)
     python = _stamped_python(stamp)
     if (
-        python
+        not upgrade
+        and python
         and (shared or _is_usable(python))
         and stamp.get("inputs") == _inputs(root, plan, shared)
         and stamp.get("state") == _state(python, shared)
@@ -477,13 +567,14 @@ def prepare(
         return Environment(python, Sync("current", plan.tool), stamp["inputs"])
 
     existing = _existing(root, stamp, shared, plan.uv[:-1])
-    steps, python = _steps(root, plan, shared)
+    before = _versions(existing, shared) if upgrade else {}
+    steps, python, makes_venv = _steps(root, plan, shared, upgrade)
     # What a failed installer leaves is removed, but only what this start made.
     leftovers = [
         path for path in (root / ".venv", root / "uv.lock") if not os.path.lexists(path)
     ]
     finished = 0
-    is_remade = len(steps) > 1 and os.path.lexists(root / ".venv")
+    is_remade = makes_venv and os.path.lexists(root / ".venv")
     started = time.monotonic()
     failure: Sync | None = None
     for command in steps:
@@ -533,7 +624,7 @@ def prepare(
                 break
         finished += 1
     if failure is not None:
-        if len(steps) > 1 and finished:
+        if makes_venv and finished:
             # `uv venv --clear` made this `.venv`, also where a broken one was.
             leftovers.append(root / ".venv")
             failure = dataclasses.replace(failure, note=REMADE if is_remade else "")
@@ -545,6 +636,12 @@ def prepare(
             else:
                 path.unlink(missing_ok=True)
         return Environment(existing, failure)
+    notes = [REMADE] if is_remade else []
+    changes = _changes(before, _versions(python, shared)) if upgrade else ()
+    if upgrade and not changes and _is_offline(env):
+        notes.append(OFFLINE)
+    if not shared:
+        notes.append(_add_pip(python, root, env, timeout_s))
     digest = _inputs(root, plan, shared)
     _write_stamp(
         stamp_file,
@@ -558,11 +655,12 @@ def prepare(
     return Environment(
         python,
         Sync(
-            "installed",
+            "upgraded" if upgrade else "installed",
             plan.tool,
             steps[-1],
             time.monotonic() - started,
-            note=REMADE if is_remade else "",
+            note="; ".join(note for note in notes if note),
+            changes=changes,
         ),
         digest,
     )
@@ -607,8 +705,19 @@ def describe(sync: Sync | None, *, is_running: bool = True) -> str:
         return ""
     if sync.state == "current":
         return "dependencies current"
-    if sync.state == "installed":
-        said = f"dependencies installed with {sync.tool} in {sync.seconds:.1f} s"
+    if sync.state in ("installed", "upgraded"):
+        said = f"dependencies {sync.state} with {sync.tool} in {sync.seconds:.1f} s"
+        if sync.state == "upgraded":
+            shown = ", ".join(sync.changes[:CHANGES_SHOWN])
+            more = len(sync.changes) - CHANGES_SHOWN
+            if more > 0:
+                shown += f" and {more} more"
+            said = (
+                f"{said}: {shown}"
+                if shown
+                else f"dependencies checked with {sync.tool} in {sync.seconds:.1f} s:"
+                " no newer version was installed"
+            )
         return f"{said}; {sync.note}" if sync.note else said
     if sync.state == "skipped":
         return f"dependencies NOT installed: {sync.reason}"

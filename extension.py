@@ -93,7 +93,10 @@ PROMPT = prompt.routing(
     notes=(
         "`py.repl_start` first installs the project's dependencies: `pyproject.toml` with the uv"
         " that Vis ships, else `requirements.txt` into `.venv`. So the REPL sees the project's"
-        " packages; the sandbox block does not. Unchanged files install nothing. Read the result's"
+        " packages; the sandbox block does not. Unchanged files install nothing."
+        " `py.repl_start(upgrade=True)` installs the newest versions that the files allow, at"
+        " that one start; stop a live REPL first. `python -m pip install` works in the REPL."
+        " Read the result's"
         " `detail`: it says what was installed, and it carries the installer's output when the"
         " installation failed. When vis.yml sets `python.environment: shared`, the packages go to"
         " Vis shared packages and the REPL runs `vis-agent python --shared`, never the project's"

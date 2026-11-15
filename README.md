@@ -66,6 +66,20 @@ When a broken `.venv` stops pytest or the REPL, the error names both fixes.
   `detail` says so. A `.venv` directory that is no virtualenv is never cleared.
 - A live REPL gets no installation. When the dependency files changed after its start, the result
   says to stop and start it.
+- `py.repl_start(upgrade=True)` installs the newest versions that the files allow, at that one
+  start: `uv run --upgrade`, or `uv pip install --upgrade`. A pinned version stays. A uv project
+  gets its `uv.lock` upgraded; with shared packages that is `uv lock --upgrade`, then `uv sync`.
+  The `detail` then names each changed package with its versions, or says that no newer version
+  was installed. A start without `upgrade` never asks the index when nothing changed. With a live
+  REPL, `upgrade=True` is refused: stop the REPL first.
+- A project environment without `pip` gets the `pip` of its own Python (`python -m ensurepip`), so
+  `python -m pip install` works in the REPL. This needs no index. An environment that has `pip`
+  keeps it. When `pip` cannot be added, the start continues and the `detail` says so. An exact
+  `uv sync` that you run removes this `pip`; the next start adds it again.
+- In a shared REPL, Vis makes `sys.executable` an environment of its shared packages, so
+  `python -m pip install` there installs into them. A Vis older than this installs into its own
+  Python runtime: run `vis-agent update`. To change or remove a shared package, use
+  `vis-agent python --shared uv pip install` or `uninstall`.
 
 The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
 reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.

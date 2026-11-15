@@ -309,6 +309,10 @@ class PythonTools:
     def repl_start(
         self,
         cwd: Annotated[str, "Project directory to run the interpreter in."] = "",
+        *,
+        upgrade: Annotated[
+            bool, "Install the newest versions that the dependency files allow."
+        ] = False,
     ) -> ReplSession:
         """Start a persistent interpreter for this directory, or keep the live one.
 
@@ -316,17 +320,28 @@ class PythonTools:
         that Vis ships, else requirements.txt into .venv, which is made when absent.
         When the project's python.environment is shared, they go to Vis shared
         packages and vis-agent python --shared is used. Nothing runs when the files
-        did not change after the last installation. The detail says what was done.
+        did not change after the last installation. With upgrade=True, this one
+        start installs the newest versions that the files allow: a pinned version
+        stays, and a uv project gets its uv.lock upgraded. A project environment
+        without pip gets the pip of its own Python, so python -m pip install works
+        in the REPL; in a shared REPL, Vis points that pip at its shared packages.
+        The detail says what was done, and for an upgrade it names the changed
+        packages.
         A failed installation is reported there with the installer's output, and the
         REPL then runs on the environment that exists. Without dependency files the
         interpreter is Poetry, a local virtualenv or python3, in that order. A live
-        REPL is never replaced, because its globals are the work. The interpreter
+        REPL is never replaced, because its globals are the work: with
+        upgrade=True it is refused, so stop it first. The interpreter
         gets the variables that a `before` op hook on `py.repl_start` adds with
         `vis.with_env`; a live REPL that runs with other variables is refused. Raises
         RuntimeError when the interpreter fails its startup handshake, or when the
         installation fails and no environment exists.
         """
-        options = {"cwd": str(self._absolute(cwd)), "shared": self._shared()}
+        options = {
+            "cwd": str(self._absolute(cwd)),
+            "shared": self._shared(),
+            "upgrade": upgrade,
+        }
         env = call_env()
         if env:
             options["env"] = env

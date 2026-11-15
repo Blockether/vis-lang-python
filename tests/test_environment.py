@@ -29,9 +29,15 @@ class Installer:
         self.exit_code = 0
         self.err = ""
         self.raises = None
+        self.fails = ""
 
     def said(self):
-        return [" ".join(command[1:]) for command in self.commands]
+        """What uv was told. The environment's own Python adds pip, not uv."""
+        return [
+            " ".join(command[1:])
+            for command in self.commands
+            if "ensurepip" not in command
+        ]
 
     def environment(self, name=".venv"):
         python = self.root / name / "bin" / "python"
@@ -43,23 +49,31 @@ class Installer:
 
     def install(self, python: Path, name="dep-1.0"):
         packages = python.parent.parent / "lib" / "python3.13" / "site-packages"
-        (packages / f"{name}.dist-info").mkdir(parents=True, exist_ok=True)
+        packages.mkdir(parents=True, exist_ok=True)
+        for old in packages.glob(f"{name.partition('-')[0]}-*.dist-info"):
+            old.rmdir()
+        (packages / f"{name}.dist-info").mkdir()
 
     def __call__(self, command, root, env, timeout_s):
         self.commands.append(tuple(command))
         if self.raises:
             raise self.raises
         out = ""
-        if self.exit_code == 0 and "--shared" not in command:
-            if "venv" in command:
+        exit_code = 1 if self.fails and self.fails in command else self.exit_code
+        # The index has a newer version than a start without `--upgrade` keeps.
+        dep = "dep-2.0" if "--upgrade" in command else "dep-1.0"
+        if exit_code == 0 and "--shared" not in command:
+            if "ensurepip" in command:
+                self.install(Path(command[0]), "pip-1.0")
+            elif "venv" in command:
                 self.environment()
             elif "run" in command:
                 python = self.environment()
-                self.install(python)
+                self.install(python, dep)
                 out = f"{python}\n"
             else:
-                self.install(Path(command[command.index("--python") + 1]))
-        return process.ToolRun(tuple(command), self.exit_code, out, self.err, 1)
+                self.install(Path(command[command.index("--python") + 1]), dep)
+        return process.ToolRun(tuple(command), exit_code, out, self.err, 1)
 
 
 @pytest.fixture
@@ -334,7 +348,7 @@ def test_two_starts_at_once_install_once(tmp_path, uv, monkeypatch):
             start.start()
         for start in starts:
             start.join()
-        assert len(uv.commands) == 2
+        assert len(uv.said()) == 2
         assert sorted(detail.split(" · ")[0] for detail in details) == [
             "already running",
             "started",
@@ -468,6 +482,130 @@ def test_shared_packages_get_the_dependencies_and_no_environment(tmp_path, monke
     assert len(fake.commands) == done + 1
 
 
+# Blockether/vis#480: `python -m pip install` must work in the REPL, also offline.
+def test_the_environment_gets_the_pip_of_its_own_python(tmp_path, uv):
+    # uv's own seed asks the index. The Python of the environment carries a pip.
+    (tmp_path / "requirements.txt").write_text("six\n")
+    python = environment.prepare(str(tmp_path)).python
+    assert uv.commands[-1] == (*python, "-m", "ensurepip", "--default-pip")
+    assert environment.prepare(str(tmp_path)).sync.state == "current"
+    # An environment that has pip keeps it.
+    (tmp_path / "requirements.txt").write_text("six\nidna\n")
+    done = len(uv.commands)
+    assert environment.prepare(str(tmp_path)).sync.state == "installed"
+    assert len(uv.commands) == done + 1 == len(uv.said()) + 1
+
+
+def test_a_start_without_pip_still_has_the_dependencies(tmp_path, uv):
+    (tmp_path / "pyproject.toml").write_text(PROJECT)
+    uv.fails = "ensurepip"
+    ready = environment.prepare(str(tmp_path))
+    assert ready.python == (str(tmp_path / ".venv" / "bin" / "python"),)
+    assert environment.describe(ready.sync).endswith(
+        "; pip was not added: `python -m ensurepip` exited with status 1"
+    )
+
+
+@pytest.mark.parametrize(
+    "files, said",
+    [
+        (
+            {"requirements.txt": "six\n"},
+            "pip install --upgrade --python {python} -r requirements.txt",
+        ),
+        (
+            {"pyproject.toml": PROJECT},
+            "pip install --upgrade --python {python} -r pyproject.toml",
+        ),
+        (
+            {"pyproject.toml": PROJECT, "uv.lock": ""},
+            f"run --upgrade python -c {environment.PRINT_EXECUTABLE}",
+        ),
+    ],
+)
+def test_an_upgrade_asks_for_the_newest_versions_at_that_start(
+    tmp_path, uv, files, said
+):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    python = uv.environment()
+    environment.prepare(str(tmp_path))
+    done = len(uv.said())
+    sync = environment.prepare(str(tmp_path), upgrade=True).sync
+    assert uv.said()[done:] == [said.format(python=python)]
+    assert environment.describe(sync).startswith("dependencies upgraded with uv in ")
+    assert environment.describe(sync).endswith(" s: dep 1.0 -> 2.0")
+    # The upgrade is what is installed now: the next start runs no installer.
+    assert environment.prepare(str(tmp_path)).sync.state == "current"
+    assert len(uv.said()) == done + 1
+
+
+def test_an_upgrade_that_changes_nothing_says_so(tmp_path, uv, monkeypatch):
+    # uv exits with status 0 when it finds nothing newer, also when `UV_OFFLINE`
+    # keeps it from the index. "upgraded" would be false then.
+    (tmp_path / "requirements.txt").write_text("six\n")
+    first = environment.prepare(str(tmp_path), upgrade=True).sync
+    assert environment.describe(first).endswith(" s: dep 2.0")
+    again = environment.prepare(str(tmp_path), upgrade=True).sync
+    assert environment.describe(again).startswith("dependencies checked with uv in ")
+    assert environment.describe(again).endswith(": no newer version was installed")
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    offline = environment.prepare(str(tmp_path), upgrade=True).sync
+    assert environment.describe(offline).endswith(
+        ": no newer version was installed; UV_OFFLINE is set, so uv asked no index"
+    )
+
+
+def test_an_upgrade_of_shared_packages_keeps_the_environment_of_the_person(
+    tmp_path, monkeypatch
+):
+    fake = Installer(tmp_path)
+    monkeypatch.setattr(environment, "_run", fake)
+    monkeypatch.setattr(environment.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setenv("VIS_HOME", str(tmp_path / "vis"))
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "notes.txt").write_text("mine")
+    (tmp_path / "requirements.txt").write_text("six\n")
+    environment.prepare(str(tmp_path), shared=True, upgrade=True)
+    (tmp_path / "pyproject.toml").write_text(PROJECT)
+    environment.prepare(str(tmp_path), shared=True, upgrade=True)
+    (tmp_path / "uv.lock").write_text("")
+    fake.fails = "sync"
+    failed = environment.prepare(str(tmp_path), shared=True, upgrade=True)
+    assert failed.sync.state == "failed"
+    shared = "/bin/vis-agent python --shared uv"
+    assert [" ".join(command) for command in fake.commands] == [
+        f"{shared} pip install --upgrade -r requirements.txt",
+        f"{shared} pip install --upgrade -r pyproject.toml",
+        # Vis refuses `uv sync --upgrade` for shared packages.
+        f"{shared} lock --upgrade",
+        f"{shared} sync",
+    ]
+    assert (tmp_path / ".venv" / "notes.txt").read_text() == "mine"
+
+
+def test_an_upgrade_is_refused_under_a_live_repl(tmp_path, uv):
+    (tmp_path / "requirements.txt").write_text("six\n")
+    tools, cwd = PythonTools(), str(tmp_path)
+    try:
+        tools.repl_start(cwd=cwd)
+        tools.repl_eval("kept = 41", cwd=cwd)
+        done = len(uv.commands)
+        with pytest.raises(
+            RuntimeError, match="repl_stop that REPL, then start it with upgrade=True"
+        ):
+            tools.repl_start(cwd=cwd, upgrade=True)
+        assert len(uv.commands) == done
+        assert tools.repl_eval("kept + 1", cwd=cwd).value == "42"
+    finally:
+        tools.repl_stop(cwd=cwd)
+    try:
+        started = tools.repl_start(cwd=cwd, upgrade=True)
+        assert started.detail.startswith("started · dependencies upgraded with uv in ")
+    finally:
+        tools.repl_stop(cwd=cwd)
+
+
 def test_the_uv_of_vis_comes_before_the_uv_on_path(tmp_path, monkeypatch):
     found = {"vis-agent": "/opt/vis-agent", "uv": "/usr/bin/uv"}
     monkeypatch.setattr(environment.shutil, "which", found.get)
@@ -540,6 +678,10 @@ def test_a_real_start_installs_and_imports_the_dependency(tmp_path, real_uv, kin
         assert (
             tools.repl_eval("import vis478_dep; vis478_dep.ANSWER", cwd=cwd).value
             == "42"
+        )
+        # Blockether/vis#480: pip is there without the index, which is off here.
+        assert tools.repl_eval("import pip; bool(pip.__version__)", cwd=cwd).value == (
+            "True"
         )
         tools.repl_stop(cwd=cwd)
         assert tools.repl_start(cwd=cwd).detail == "started · dependencies current"

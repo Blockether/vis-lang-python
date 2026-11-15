@@ -790,10 +790,10 @@ def start(options=None) -> dict:
 
     A live REPL is NEVER silently replaced: its globals ARE the session's work.
     So a second start answers `already-running`, and installs nothing under the
-    running code. A new REPL first gets the project's dependencies (see
-    `environment.prepare`), with a time limit of its own. A start succeeds only
-    after the child answers its protocol ping. A failed child is never reported
-    as a usable REPL.
+    running code; one that asks for an upgrade fails. A new REPL first gets the
+    project's dependencies (see `environment.prepare`), with a time limit of its
+    own. A start succeeds only after the child answers its protocol ping. A
+    failed child is never reported as a usable REPL.
     """
     options = options or {}
     cwd = _project_dir(options)
@@ -829,11 +829,21 @@ def _start(options: dict, cwd: str) -> dict:
                 " then start it with this env."
             )
             return answer
+        if options.get("upgrade"):
+            answer["result"] = "failed"
+            answer["message"] = (
+                f"repl_start for {repl_id} is already running, and its packages"
+                " are not upgraded under the running code. There is no restart:"
+                " repl_stop that REPL, then start it with upgrade=True."
+            )
+            return answer
         answer["result"] = "already-running"
         return answer
 
     child = _child_environment(options.get("env"))
-    ready = environment.prepare(cwd, shared=shared, env=child)
+    ready = environment.prepare(
+        cwd, shared=shared, upgrade=bool(options.get("upgrade")), env=child
+    )
     python = tuple(ready.python or detect_command(cwd, shared=shared))
     # The interpreter of an environment runs without `uv run` around it, so the
     # environment's programs get on PATH here.
