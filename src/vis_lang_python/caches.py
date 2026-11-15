@@ -48,6 +48,16 @@ def pip_cache() -> str:
     return _directory("PIP_CACHE_DIR", ".cache", "pip")
 
 
+def sync_stamps() -> str:
+    """Where this extension remembers which project dependencies are installed.
+
+    Returns:
+        The directory `VIS_LANG_PYTHON_CACHE` names, else
+        `~/.cache/vis-lang-python`.
+    """
+    return _directory("VIS_LANG_PYTHON_CACHE", ".cache", "vis-lang-python")
+
+
 def cache_paths() -> tuple[str, ...]:
     """The directories that a confined Python run shares with the person's tools.
 

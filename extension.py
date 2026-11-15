@@ -4,7 +4,7 @@ import blockether.vis.extension as vis
 from vis_lang_interface import presentation, prompt
 from vis_lang_interface.syntax import SyntaxGuard
 
-from vis_lang_python.caches import cache_paths
+from vis_lang_python.caches import cache_paths, sync_stamps
 from vis_lang_python.repair import repair_source
 from vis_lang_python.toolchain import grantable, toolchain_paths
 from vis_lang_python.tools import SYNTAX_SUFFIXES, PythonTools, _check_syntax
@@ -91,10 +91,13 @@ PROMPT = prompt.routing(
         "repl_stop",
     ),
     notes=(
-        "`py.repl_start` uses the project's own interpreter (uv, Poetry, a local virtualenv or"
-        " python3, in that order), so the REPL sees the project's packages; the sandbox block does"
-        " not. When vis.yml sets `python.environment: shared`, it uses `vis-agent python --shared`"
-        " and never the project's `.venv`. `py.repl_eval` needs that interpreter started first.",
+        "`py.repl_start` first installs the project's dependencies: `pyproject.toml` with the uv"
+        " that Vis ships, else `requirements.txt` into `.venv`. So the REPL sees the project's"
+        " packages; the sandbox block does not. Unchanged files install nothing. Read the result's"
+        " `detail`: it says what was installed, and it carries the installer's output when the"
+        " installation failed. When vis.yml sets `python.environment: shared`, the packages go to"
+        " Vis shared packages and the REPL runs `vis-agent python --shared`, never the project's"
+        " `.venv`. `py.repl_eval` needs that interpreter started first.",
         "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
         " and `py.lint_code` run ruff.",
         "`py.run_tests(coverage=True)` runs pytest under the project's coverage.py. Its result's"
@@ -119,6 +122,14 @@ GRANTS = [
         )
         for path in grantable(cache_paths(), existing=False)
     ),
+    *(
+        vis.Grant(
+            path,
+            "read_write",
+            reason="Remember which project dependencies are installed.",
+        )
+        for path in grantable([sync_stamps()], existing=False)
+    ),
 ]
 
 
@@ -126,7 +137,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.16.10",
+        version="1.17.0",
         alias="py",
         symbols=[
             vis.Symbol(

@@ -30,7 +30,7 @@ from vis_lang_interface import (
     string_list,
 )
 
-from vis_lang_python import pytest_tool, repl, ruff_tool
+from vis_lang_python import environment, pytest_tool, repl, ruff_tool
 from vis_lang_python.repair import repair_source
 
 MARKERS = (
@@ -98,6 +98,9 @@ def _session(language, answer):
     detail = [happened.replace("-", " ")]
     if answer.get("busy"):
         detail += ["busy", str(answer.get("message") or "")]
+    detail.append(environment.describe(answer.get("sync")))
+    if answer.get("stale"):
+        detail.append(environment.STALE)
     return ReplSession(
         language,
         repl.abbreviate_home(answer["cwd"]),
@@ -135,7 +138,17 @@ def _unparsed(syntax, exc):
 
 
 def _start_failure(answer):
-    """The error text of a failed REPL start: the cause, the command and the output."""
+    """The error text of a failed REPL start: the cause, the command and the
+    output, of the interpreter and of a failed dependency installation."""
+    lines = _launch_failure(answer)
+    sync = answer.get("sync")
+    if sync is not None and sync.state == "failed":
+        lines.extend(environment.failure_lines(sync, is_running=False))
+    return "\n".join(lines)
+
+
+def _launch_failure(answer):
+    """The lines about the interpreter of a failed REPL start."""
     lines = [str(answer.get("message") or "REPL failed")]
     command = answer.get("cmd")
     if command:
@@ -144,10 +157,10 @@ def _start_failure(answer):
     if tail:
         lines.append("Last output of the interpreter:")
         lines.extend(tail)
-        return "\n".join(lines)
+        return lines
     probe = answer.get("probe")
     if not probe:
-        return "\n".join(lines)
+        return lines
     lines.append("The interpreter wrote nothing to its log.")
     said = list(probe.get("output") or ())
     if "error" in probe:
@@ -166,7 +179,7 @@ def _start_failure(answer):
     if said:
         lines.append("Check run output:")
         lines.extend(said)
-    return "\n".join(lines)
+    return lines
 
 
 class PythonTools:
@@ -299,13 +312,19 @@ class PythonTools:
     ) -> ReplSession:
         """Start a persistent interpreter for this directory, or keep the live one.
 
-        The project's own interpreter is used: uv, Poetry, a local virtualenv or
-        python3, in that order. When the project's python.environment is shared,
-        vis-agent python --shared is used. A live REPL is never replaced, because its
-        globals are the work. The interpreter gets the variables that a `before` op
-        hook on `py.repl_start` adds with `vis.with_env`; a live REPL that runs with
-        other variables is refused. Raises
-        RuntimeError when the interpreter fails its startup handshake.
+        A new REPL first gets the project's dependencies: pyproject.toml with the uv
+        that Vis ships, else requirements.txt into .venv, which is made when absent.
+        When the project's python.environment is shared, they go to Vis shared
+        packages and vis-agent python --shared is used. Nothing runs when the files
+        did not change after the last installation. The detail says what was done.
+        A failed installation is reported there with the installer's output, and the
+        REPL then runs on the environment that exists. Without dependency files the
+        interpreter is Poetry, a local virtualenv or python3, in that order. A live
+        REPL is never replaced, because its globals are the work. The interpreter
+        gets the variables that a `before` op hook on `py.repl_start` adds with
+        `vis.with_env`; a live REPL that runs with other variables is refused. Raises
+        RuntimeError when the interpreter fails its startup handshake, or when the
+        installation fails and no environment exists.
         """
         options = {"cwd": str(self._absolute(cwd)), "shared": self._shared()}
         env = call_env()

@@ -1,8 +1,10 @@
 """The managed Python REPL this extension owns.
 
 `py.repl_start`, `py.repl_status`, `py.repl_stop` and `py.repl_eval` reach this
-module. It launches the project's own interpreter as a persistent child: uv,
-Poetry, a `.venv` or `python3`. The child runs a small line-framed eval server.
+module. It installs the project's dependencies (see `environment`), then
+launches the project's own interpreter as a persistent child: the project's
+environment, Poetry, a `.venv` or `python3`. The child runs a small line-framed
+eval server.
 One JSON request goes in per line, and one JSON answer comes out per line.
 Globals live between evaluations. That is what makes it a REPL and not a series
 of scripts.
@@ -30,6 +32,10 @@ from pathlib import Path
 
 from vis_lang_interface import RuntimeGone, process, runtime
 from vis_lang_interface.process import shell_call
+
+from vis_lang_python import environment
+from vis_lang_python.environment import is_uv_marked as _is_uv_project
+from vis_lang_python.environment import venv_python as _venv_python
 
 DRIVER = r"""import sys, os, json, io, ast, signal, threading, contextlib, pprint, traceback
 
@@ -329,42 +335,6 @@ def _repl_id(options, cwd: str) -> str:
     return "pyrepl:" + cwd
 
 
-def _venv_python(root: Path) -> str | None:
-    """ABSOLUTE path of a project-local virtualenv's interpreter, or None.
-
-    Never RESOLVED: `.venv/bin/python3` is a symlink chain that ends at the base
-    installation. Following it leaves the virtualenv. Then `sys.prefix` becomes
-    the base prefix and `pyvenv.cfg` is never read. The run fails with
-    `No module named pytest`, while the same suite passes under
-    `.venv/bin/python`.
-    """
-    for venv in (".venv", "venv"):
-        for name in ("bin/python", "bin/python3"):
-            candidate = root / venv / name
-            if candidate.is_file():
-                return str(candidate)
-    return None
-
-
-def _is_uv_project(root: Path) -> bool:
-    """A `uv.lock`, or a real `[tool.uv]` table in `pyproject.toml`, read as
-    TOML and never as a substring search. `[tool.uvicorn]`, a commented-out
-    `[tool.uv]` or a description that only mentions one is not a uv project.
-    Picking `uv run python` for those launches the wrong interpreter."""
-    if (root / "uv.lock").is_file():
-        return True
-    pyproject = root / "pyproject.toml"
-    if not pyproject.is_file():
-        return False
-    try:
-        import tomllib
-
-        tool = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool")
-    except Exception:
-        return False
-    return isinstance(tool, dict) and isinstance(tool.get("uv"), dict)
-
-
 SHARED_MISSING = (
     "python.environment is shared, but vis-agent is not on PATH. Install vis-agent,"
     " or set python.environment to project in vis.yml."
@@ -463,11 +433,16 @@ class ReplTimeout(ReplError):
 class _Repl:
     """One interpreter runtime and the framed conversation with it."""
 
-    def __init__(self, live, cwd: str, cmd: list[str], env_fingerprint, place=None):
+    def __init__(
+        self, live, cwd: str, cmd: list[str], env_fingerprint, place=None, inputs=None
+    ):
         self.live = live
         self.cwd = cwd
         self.cmd = cmd
         self.env_fingerprint = dict(env_fingerprint or {})
+        # The digest of the dependency files that this REPL's environment holds.
+        # None for a REPL that an earlier version of this extension started.
+        self.inputs = inputs
         # The rendezvous directory, which holds the driver's interrupt FIFO.
         self.place = place
         # True while code that ignored an interrupt can still hold the driver.
@@ -679,17 +654,36 @@ def _kept_directory(command) -> str | None:
     return None
 
 
-def _kept_fingerprint(command) -> dict:
-    """The environment fingerprint that the start of a kept REPL placed."""
-    place = _kept_directory(command)
+def _placed(place, name: str) -> dict:
+    """A JSON object that the start of a kept REPL placed in its rendezvous."""
     if place is None:
         return {}
     try:
-        with open(os.path.join(place, "env.json"), encoding="utf-8") as handle:
+        with open(os.path.join(place, name), encoding="utf-8") as handle:
             value = json.load(handle)
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _kept_fingerprint(command) -> dict:
+    """The environment fingerprint that the start of a kept REPL placed."""
+    return _placed(_kept_directory(command), "env.json")
+
+
+def _kept_start(command) -> tuple[list[str] | None, str | None]:
+    """The command and the dependency digest that the start of a kept REPL placed.
+
+    The project's files can select another interpreter now than at the start:
+    an installation made a `.venv`, or a `requirements.txt` is new. The placed
+    command still finds the REPL, so that it is never replaced.
+    """
+    placed = _placed(_kept_directory(command), "start.json")
+    cmd = placed.get("cmd")
+    if not isinstance(cmd, list) or not all(isinstance(part, str) for part in cmd):
+        cmd = None
+    inputs = placed.get("inputs")
+    return cmd, inputs if isinstance(inputs, str) else None
 
 
 def _kept(cwd: str) -> _Repl | None:
@@ -706,7 +700,9 @@ def _kept(cwd: str) -> _Repl | None:
     if str(shell.get("status")) != "running":
         return None
     command = str(shell.get("command") or "")
-    cmd = next((c for c in _kept_commands(cwd) if shlex.join(c) in command), None)
+    placed, inputs = _kept_start(command)
+    candidates = [placed] if placed else _kept_commands(cwd)
+    cmd = next((c for c in candidates if shlex.join(c) in command), None)
     if cmd is None:
         return None
     place = _kept_directory(command)
@@ -724,7 +720,7 @@ def _kept(cwd: str) -> _Repl | None:
         # its driver. That one is not the user's REPL.
         live.stop()
         return None
-    kept = _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")), place)
+    kept = _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")), place, inputs)
     # An earlier process may have left code running in it.
     kept.stuck = True
     return kept
@@ -783,18 +779,30 @@ def start(options=None) -> dict:
     """Start this worker's Python REPL for `cwd`, or reuse the live one.
 
     A live REPL is NEVER silently replaced: its globals ARE the session's work.
-    So a second start answers `already-running`. A start succeeds only after the
-    child answers its protocol ping. The wait continues while `uv run` or
-    `poetry run` installs packages (see `_await_startup`). A failed child is
-    never reported as a usable REPL.
+    So a second start answers `already-running`, and installs nothing under the
+    running code. A new REPL first gets the project's dependencies (see
+    `environment.prepare`), with a time limit of its own. A start succeeds only
+    after the child answers its protocol ping. A failed child is never reported
+    as a usable REPL.
     """
     options = options or {}
     cwd = _project_dir(options)
+    # A second start waits for the first one's installation, then finds its REPL.
+    with environment.locked(cwd):
+        return _start(options, cwd)
+
+
+def _start(options: dict, cwd: str) -> dict:
     repl_id = _repl_id(options, cwd)
+    shared = bool(options.get("shared"))
     live = _live(cwd)
     if live:
         answer = _status(cwd, live)
         answer["id"] = repl_id
+        if live.inputs is not None and live.inputs != environment.inputs(
+            cwd, shared=shared
+        ):
+            answer["stale"] = True
         # A REPL IS its environment: reusing one started with other variables would
         # report success for a process that never saw the ones this start asked for.
         wanted = dict(options.get("env_fingerprint") or {})
@@ -814,6 +822,23 @@ def start(options=None) -> dict:
         answer["result"] = "already-running"
         return answer
 
+    child = _child_environment(options.get("env"))
+    ready = environment.prepare(cwd, shared=shared, env=child)
+    python = tuple(ready.python or detect_command(cwd, shared=shared))
+    # The interpreter of an environment runs without `uv run` around it, so the
+    # environment's programs get on PATH here.
+    child = {**child, **environment.activation(python, child.get("PATH"))}
+    if ready.sync.state == "failed" and not ready.python:
+        # No environment exists to run in. The installer's words are the answer.
+        return {
+            "result": "failed",
+            "status": "failed",
+            "id": repl_id,
+            "cwd": cwd,
+            "message": "Python REPL was not started: the project's dependencies"
+            " could not be installed, and the project has no environment to run in.",
+            "sync": ready.sync,
+        }
     meeting = runtime.Rendezvous("python").open()
     try:
         # The driver is a file next to the runtime's channels, not 17k of source
@@ -823,18 +848,21 @@ def start(options=None) -> dict:
         meeting.place(
             "env.json", json.dumps(dict(options.get("env_fingerprint") or {}))
         )
-        cmd = _command(cwd, shared=bool(options.get("shared")))
+        cmd = [*python, "-c", LOADER]
+        meeting.place("start.json", json.dumps({"cmd": cmd, "inputs": ready.inputs}))
         live = runtime.start(
             cmd,
             cwd=cwd,
-            env=_child_environment(options.get("env")),
+            env=child,
             meeting=meeting,
             shell_id=shell_id(cwd),
         )
     except BaseException:
         meeting.close()
         raise
-    repl = _Repl(live, cwd, cmd, options.get("env_fingerprint"), meeting.path)
+    repl = _Repl(
+        live, cwd, cmd, options.get("env_fingerprint"), meeting.path, ready.inputs
+    )
     try:
         pong = _await_startup(repl)
         if pong.get("pong") is not True:
@@ -868,10 +896,12 @@ def start(options=None) -> dict:
         elif not alive:
             # Blockether/vis#389: the child left no output. Ask the same
             # interpreter again, where its output cannot get lost.
-            answer["probe"] = _probe(cmd, cwd, _child_environment(options.get("env")))
+            answer["probe"] = _probe(cmd, cwd, child)
         hint = environment_hint("\n".join(tail or ()))
         if hint:
             answer["message"] += f". {hint}"
+        if ready.sync.state == "failed":
+            answer["sync"] = ready.sync
         return answer
 
     with _REPLS_LOCK:
@@ -879,6 +909,7 @@ def start(options=None) -> dict:
     answer = _status(cwd, repl)
     answer["result"] = "started"
     answer["id"] = repl_id
+    answer["sync"] = ready.sync
     return answer
 
 

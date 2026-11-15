@@ -71,6 +71,7 @@ def test_the_toolchain_is_read_only_and_the_caches_are_writable(tmp_path, monkey
     monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", str(tmp_path / "pythons"))
     monkeypatch.setenv("POETRY_CACHE_DIR", str(tmp_path / "poetry"))
     monkeypatch.setenv("PIP_CACHE_DIR", str(tmp_path / "pip"))
+    monkeypatch.setenv("VIS_LANG_PYTHON_CACHE", str(tmp_path / "stamps"))
     grants = _declared(monkeypatch)["grants"]
     assert [(str(grant.path), grant.mode) for grant in grants] == [
         (str(tool), "read"),
@@ -78,5 +79,6 @@ def test_the_toolchain_is_read_only_and_the_caches_are_writable(tmp_path, monkey
         (str(tmp_path / "pythons"), "read_write"),
         (str(tmp_path / "poetry"), "read_write"),
         (str(tmp_path / "pip"), "read_write"),
+        (str(tmp_path / "stamps"), "read_write"),
     ]
     assert all(grant.reason for grant in grants)

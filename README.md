@@ -20,7 +20,7 @@ py.lint_code(["src"])                        # ruff check, with rule codes
 py.run_tests(["tests"], keyword="repl")      # pytest, counted from its JUnit report
 py.run_tests(["tests"], max_failures=1)      # stop at the first failure
 py.run_tests(["tests"], coverage=True)       # + coverage.py lines, branches and gaps
-py.repl_start(cwd="~/app")                   # the project's own interpreter
+py.repl_start(cwd="~/app")                   # install the dependencies, then the project's interpreter
 py.repl_eval("model = load()", cwd="~/app")  # globals live between calls
 py.repl_stop(cwd="~/app")
 ```
@@ -31,8 +31,39 @@ from the project's virtualenv, then `PATH`, then the copy installed with this ex
 
 If the project's `vis.yml` sets `python: {environment: shared}`, tests and the REPL run with
 `vis-agent python --shared` instead. They then import Vis shared packages and never use `.venv`.
-Install the project's dependencies there with `vis-agent python --shared uv sync`. When a broken
-`.venv` stops pytest or the REPL, the error names both fixes.
+When a broken `.venv` stops pytest or the REPL, the error names both fixes.
+
+`py.repl_start` installs the project's dependencies before the interpreter starts:
+
+| The project has | The start runs | The REPL runs in |
+| --- | --- | --- |
+| `pyproject.toml` with `[project]`, a `dev` group in `[dependency-groups]`, or a `uv.lock` | `vis-agent python uv run` | the project's `.venv`, which uv makes |
+| the same without `uv.lock` and `[tool.uv]`, and a `.venv` or `venv` that you made | `vis-agent python uv pip install -r pyproject.toml` (and `--group dev`) | that environment; uv writes no lock, makes no second environment and does not install the project itself |
+| only `requirements.txt` | `vis-agent python uv pip install -r requirements.txt` | `.venv` or `venv`; `.venv` is made when both are absent |
+| `python: {environment: shared}` in `vis.yml` | `vis-agent python --shared uv sync` for a uv project, else `uv pip install -r pyproject.toml` or `-r requirements.txt` | Vis shared packages, no `.venv` |
+| `poetry.lock` without a uv marker, or no dependency file | nothing | as the list above says |
+
+- `pyproject.toml` wins over `requirements.txt`. A `pyproject.toml` with only tool configuration does
+  not count. A `[tool.uv]` table alone makes a uv project only when there is no `requirements.txt`.
+- The installer is the uv that Vis ships. A `uv` on `PATH` is used only when `vis-agent` is absent.
+- When uv makes the `.venv` of a `pyproject.toml` project, it also writes a `uv.lock`. Packages that
+  you installed by hand stay.
+- A REPL in a virtualenv has that environment's `bin` directory first on `PATH`, and `VIRTUAL_ENV`
+  set.
+- Starts of one project run one at a time. A second start waits, then finds the REPL of the first.
+- A successful installation leaves a stamp in `~/.cache/vis-lang-python` (`VIS_LANG_PYTHON_CACHE`).
+  While the dependency files and the installed distributions stay the same, the next start runs no
+  installer. A changed file, a deleted environment or a package that you install or remove by hand
+  makes the next start install again.
+- An installation can take 900 seconds. The result's `detail` says what the start did.
+- When the installation fails, the `detail` has the installer's command and last output. The REPL
+  then runs on the environment that exists. With no environment, the start fails with that report,
+  and the `.venv` and the `uv.lock` that the failed installer made are removed. What existed before
+  the start stays.
+- A `.venv` that is a virtualenv without an interpreter cannot run. uv makes it again, and the
+  `detail` says so. A `.venv` directory that is no virtualenv is never cleared.
+- A live REPL gets no installation. When the dependency files changed after its start, the result
+  says to stop and start it.
 
 The REPL stays alive when the Vis sandbox restarts, for example after `/reload`. The next call
 reaches the same interpreter, with its globals. Only `py.repl_stop` and the end of the session stop it.
