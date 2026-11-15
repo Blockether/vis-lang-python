@@ -3,10 +3,11 @@
 A REPL start installs what the project declares, so that the interpreter sees
 the packages that the files name. `pyproject.toml` wins over `requirements.txt`.
 The installer is the uv that Vis ships (`vis-agent python uv`), and a `uv` on
-PATH only when `vis-agent` is absent. With `python.environment: shared`, the
-packages go to Vis shared packages and no `.venv` is made.
+PATH only when the process has no Vis. Vis itself says where it is, so it does
+not need to be on PATH. With `python.environment: shared`, the packages go to
+Vis shared packages and no `.venv` is made.
 
-An installation costs a process, and `vis-agent` can take seconds to start. So a
+An installation costs a process, and Vis can take seconds to start. So a
 successful installation leaves a stamp: a digest of the dependency files and of
 the distributions in the environment. While both stay the same, the next start
 runs no installer at all.
@@ -45,7 +46,7 @@ HASHED_BYTES = 4 * 1024 * 1024
 """Files up to this size count by content, larger ones by size and time."""
 
 PRINT_EXECUTABLE = "import sys; print(sys.executable)"
-NO_INSTALLER = "neither vis-agent nor uv is on PATH"
+NO_INSTALLER = "found no Vis, and uv is not on PATH"
 REMADE = "the `.venv` had no interpreter, so uv made it again"
 STALE = (
     "the project's dependency files changed after this REPL started, or their"
@@ -152,14 +153,13 @@ def is_uv_marked(root: Path, tables: dict | None = None) -> bool:
 def installer(shared: bool = False) -> tuple[tuple[str, ...], str]:
     """The argv prefix of the uv to install with, and its name for people.
 
-    The uv that Vis ships comes first. A `uv` on PATH serves a project
-    environment only when `vis-agent` is absent. Shared packages have no other
-    installer than Vis itself.
+    The uv that Vis ships comes first, through the launcher that Vis names. A
+    `uv` on PATH serves a project environment only when the process has no Vis.
+    Shared packages have no other installer than Vis itself.
     """
-    agent = shutil.which("vis-agent")
-    if agent:
-        mode = ("--shared",) if shared else ()
-        return (agent, "python", *mode, "uv"), "uv from Vis"
+    found = process.vis_python()
+    if found.is_available:
+        return tuple(found.uv(shared=shared)), "uv from Vis"
     if not shared and shutil.which("uv"):
         return ("uv",), "uv from PATH"
     return (), ""
@@ -320,13 +320,9 @@ def _distributions(directory: Path):
 
 
 def shared_packages() -> Path:
-    """The directory of Vis shared packages: `VIS_PYTHON_PACKAGES`, else
-    `python/packages` in the Vis home."""
-    packages = os.environ.get("VIS_PYTHON_PACKAGES", "").strip()
-    if packages:
-        return Path(packages).expanduser()
-    home = os.environ.get("VIS_HOME", "").strip() or os.path.join("~", ".vis")
-    return Path(home).expanduser() / "python" / "packages"
+    """The directory of Vis shared packages, as the Vis that hosts this process
+    names it."""
+    return process.vis_python().shared_packages
 
 
 def _state(python: tuple[str, ...], shared: bool) -> str:

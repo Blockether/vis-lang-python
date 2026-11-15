@@ -479,7 +479,7 @@ def test_the_uv_of_vis_comes_before_the_uv_on_path(tmp_path, monkeypatch):
     (tmp_path / "requirements.txt").write_text("six\n")
     sync = environment.prepare(str(tmp_path)).sync
     assert environment.describe(sync) == (
-        "dependencies NOT installed: neither vis-agent nor uv is on PATH"
+        "dependencies NOT installed: found no Vis, and uv is not on PATH"
     )
 
 

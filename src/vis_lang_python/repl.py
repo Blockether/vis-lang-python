@@ -350,16 +350,16 @@ def detect_command(cwd: str, *, shared: bool = False) -> list[str]:
     """The argv PREFIX that launches a project-aware Python in `cwd`.
 
     With `shared`, the project's `python.environment` is `shared`: the prefix is
-    `vis-agent python --shared`, which imports Vis shared packages and never
-    reads `.venv`. Otherwise the first match wins, in this order: uv, Poetry, a
+    `vis-agent python --shared` of the Vis that hosts this process. It imports
+    Vis shared packages and never reads `.venv`. Otherwise the first match wins, in this order: uv, Poetry, a
     project virtualenv, then the system interpreter. uv needs `uv.lock` or
     `[tool.uv]`, plus `uv` on PATH. Poetry needs `poetry.lock`, plus `poetry` on
     PATH."""
     if shared:
-        agent = shutil.which("vis-agent")
-        if not agent:
+        found = process.vis_python()
+        if not found.is_available:
             raise RuntimeError(SHARED_MISSING)
-        return [agent, "python", "--shared"]
+        return found.python(shared=True)
     root = Path(cwd)
     if _is_uv_project(root) and shutil.which("uv"):
         return ["uv", "run", "python"]
@@ -590,9 +590,21 @@ def _command(cwd: str, *, shared: bool = False) -> list[str]:
 def _kept_commands(cwd: str) -> list[list[str]]:
     """The commands that a kept REPL for `cwd` can run: project, then shared."""
     commands = [_command(cwd)]
-    if shutil.which("vis-agent"):
+    if process.vis_python().is_available:
         commands.append(_command(cwd, shared=True))
     return commands
+
+
+def _is_launcher(command) -> bool:
+    """Whether `command` starts a launcher, which can be quiet for seconds.
+
+    The Vis that hosts this process can be a JVM or a binary with another name,
+    so its own launcher counts whatever its first program is.
+    """
+    if Path(command[0]).name in LAUNCHERS:
+        return True
+    launcher = process.vis_python().launcher
+    return bool(launcher) and tuple(command[: len(launcher)]) == launcher
 
 
 def _await_startup(repl: _Repl) -> dict:
@@ -604,9 +616,7 @@ def _await_startup(repl: _Repl) -> dict:
     It fails at once when the child exits. It also fails after a quiet period
     with no output and no answer. A cancel stops the wait at any time.
     """
-    quiet_s = (
-        LAUNCHER_QUIET_S if Path(repl.cmd[0]).name in LAUNCHERS else PING_TIMEOUT_S
-    )
+    quiet_s = LAUNCHER_QUIET_S if _is_launcher(repl.cmd) else PING_TIMEOUT_S
     outcome: dict = {}
 
     def ping():

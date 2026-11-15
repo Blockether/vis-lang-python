@@ -45,7 +45,9 @@ When a broken `.venv` stops pytest or the REPL, the error names both fixes.
 
 - `pyproject.toml` wins over `requirements.txt`. A `pyproject.toml` with only tool configuration does
   not count. A `[tool.uv]` table alone makes a uv project only when there is no `requirements.txt`.
-- The installer is the uv that Vis ships. A `uv` on `PATH` is used only when `vis-agent` is absent.
+- The installer is the uv that Vis ships. Vis says where it is, so `vis-agent` does not need to be on
+  `PATH`: Vis can be a native binary in a container. A `uv` on `PATH` is used only when the process
+  has no Vis, or on a Vis host without `vis.python_runtime` and without `vis-agent` on `PATH`.
 - When uv makes the `.venv` of a `pyproject.toml` project, it also writes a `uv.lock`. Packages that
   you installed by hand stay.
 - A REPL in a virtualenv has that environment's `bin` directory first on `PATH`, and `VIRTUAL_ENV`
@@ -70,8 +72,8 @@ reaches the same interpreter, with its globals. Only `py.repl_stop` and the end 
 
 When Vis confines a session, its jail reads only the system directories, the workspace and granted
 paths. `vis-agent`, `uv`, Poetry or ruff under your home directory, for example in `~/.local/bin`,
-are outside them. The extension declares each of these programs on `PATH`, and the file that it
-links to, as a read-only grant. It declares the uv, Poetry and pip caches as read-write grants, so a
+are outside them. The extension declares each of these programs on `PATH`, the program that starts
+Vis and the files that they link to as read-only grants. It declares the uv, Poetry and pip caches as read-write grants, so a
 confined run reuses your downloads. Vis checks the grants and gives them only to the extension's own
 processes, not to the agent.
 ## Keep files parseable

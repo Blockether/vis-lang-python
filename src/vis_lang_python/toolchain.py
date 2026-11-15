@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import shutil
 
+from vis_lang_interface import process
+
 COMMANDS = ("vis-agent", "uv", "poetry", "python3", "python", "ruff")
 """Programs that a REPL, a test run or a lint run can start."""
 
@@ -62,15 +64,17 @@ def grantable(paths, *, existing: bool = True) -> tuple[str, ...]:
 def toolchain_paths() -> tuple[str, ...]:
     """Each program of `COMMANDS` on PATH, as found and as its links resolve.
 
-    The jail follows a link only when it may read the link itself, so both the
-    found path and its target are kept.
+    The program that starts the Vis that hosts this process is one of them. Vis
+    names it, because it is not always `vis-agent` on PATH. The jail follows a
+    link only when it may read the link itself, so both the found path and its
+    target are kept.
 
     Returns:
         The files to grant read access to.
     """
     found: list[str] = []
-    for name in COMMANDS:
-        path = shutil.which(name)
+    launcher = process.vis_python().launcher
+    for path in [*launcher[:1], *(shutil.which(name) for name in COMMANDS)]:
         if path:
             found += [os.path.abspath(path), os.path.realpath(path)]
     return grantable(found)

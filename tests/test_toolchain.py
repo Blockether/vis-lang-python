@@ -2,6 +2,7 @@
 
 import os
 import runpy
+import types
 from pathlib import Path
 
 import blockether.vis.extension as vis
@@ -28,6 +29,20 @@ def test_a_program_and_the_file_it_links_to_are_granted(tmp_path, monkeypatch):
     assert toolchain.toolchain_paths() == (
         str(bin_dir / "vis-agent"),
         os.path.realpath(real),
+    )
+
+
+# Regression, Blockether/vis#479: the jail must let the extension execute the
+# program that starts Vis, also when it is not `vis-agent` on PATH.
+def test_the_program_that_starts_vis_is_granted_off_path(tmp_path, monkeypatch):
+    program = _program(tmp_path, "vis")
+    named = types.SimpleNamespace(
+        launcher=(str(program), "-Duser.home=/home/x"), shared_packages=tmp_path
+    )
+    monkeypatch.setattr(vis, "python_runtime", lambda: named, raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert toolchain.toolchain_paths() == toolchain.grantable(
+        [str(program), os.path.realpath(program)]
     )
 
 

@@ -5,12 +5,13 @@ import shlex
 import shutil
 import threading
 import time
+import types
 
 import blockether.vis.extension as vis
 import pytest
 from vis_lang_interface.process import shell_call
 
-from vis_lang_python import repl
+from vis_lang_python import environment, repl
 from vis_lang_python.tools import PythonTools
 
 
@@ -384,6 +385,31 @@ def test_a_shared_environment_without_vis_agent_names_the_fix(tmp_path, monkeypa
     monkeypatch.setattr(repl.shutil, "which", lambda name: None)
     with pytest.raises(RuntimeError, match="vis-agent is not on PATH"):
         repl.detect_command(str(tmp_path), shared=True)
+
+
+# Regression, Blockether/vis#479: Vis is not always `vis-agent` on PATH. It can
+# be a native binary in a container or a JVM. The host names its launcher.
+def test_the_launcher_that_vis_names_is_used_off_path(tmp_path, monkeypatch):
+    launcher = ("/opt/vis/java", "-cp", "/opt/vis/vis.jar", "clojure.main")
+    named = types.SimpleNamespace(
+        launcher=launcher, shared_packages=tmp_path / "packages"
+    )
+    monkeypatch.setattr(vis, "python_runtime", lambda: named, raising=False)
+    monkeypatch.setattr(repl.shutil, "which", lambda name: None)
+    shared = repl.detect_command(str(tmp_path), shared=True)
+    assert shared == [*launcher, "python", "--shared"]
+    # A JVM starts for seconds without output: it gets the launcher's patience.
+    assert repl._is_launcher(shared)
+    assert not repl._is_launcher(["/project/.venv/bin/python", "-c", "pass"])
+    assert len(repl._kept_commands(str(tmp_path))) == 2
+    assert environment.installer()[0] == (*launcher, "python", "uv")
+    assert environment.installer(shared=True)[0] == (
+        *launcher,
+        "python",
+        "--shared",
+        "uv",
+    )
+    assert environment.shared_packages() == tmp_path / "packages"
 
 
 def test_a_broken_virtualenv_start_names_both_fixes():
