@@ -304,9 +304,8 @@ def test_syntax_checks_are_private_hooks(monkeypatch):
     runpy.run_path(str(Path(__file__).resolve().parents[1] / "extension.py"))
     extension = registered[0]
     assert [(tuple(hook.ops), hook.phase) for hook in extension.op_hooks] == [
-        (("patch",), "before"),
         (("python_execution",), "before"),
-        (("patch", "python_execution"), "after"),
+        (("python_execution",), "after"),
     ]
     members = extension.symbols[0].contract["members"]
     assert "py.check_syntax" not in {member["name"] for member in members}

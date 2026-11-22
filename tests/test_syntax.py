@@ -84,24 +84,10 @@ def extension(compiler, monkeypatch, tmp_path):
     return registered[0]
 
 
-def test_registered_hook_refuses_only_a_breaking_python_patch(extension, tmp_path):
-    path = tmp_path / "example.py"
-    path.write_text("value = 1\n")
-    hook = extension.op_hooks[0]
-    preview = {"path": str(path), "before": "value = 1\n", "after": "value = (\n"}
-    refusal = hook.fn({"op": "patch", "preview": preview})
-    assert refusal["marker"] == "block"
-    assert "nothing was written" in refusal["reason"]
-    assert path.read_text() == preview["before"]
-    assert hook.fn({"preview": {**preview, "before": "value = [\n"}}) is None
-    assert hook.fn({"preview": {**preview, "after": "value = 2\n"}}) is None
-    assert hook.fn({"preview": {**preview, "path": "example.clj"}}) is None
-
-
 def test_registered_hooks_report_python_writes_until_repaired(extension, tmp_path):
     path = tmp_path / "example.pyi"
     path.write_text("value: int\n")
-    before, after = extension.op_hooks[1:]
+    before, after = extension.op_hooks
     call = {"op": "python_execution", "args": [], "result": {}}
     before.fn(call)
     path.write_text("return 1\n")
@@ -125,40 +111,19 @@ def test_parser_failures_reach_the_guard_without_a_false_verdict(
     path.write_text("pass\n")
     with pytest.raises(RuntimeError):
         tools._check_syntax({str(path): "value = (\n"}, tmp_path)
-    assert (
-        extension.op_hooks[0].fn(
-            {"preview": {"path": str(path), "before": "pass\n", "after": "value = (\n"}}
-        )
-        is None
-    )
+    before, after = extension.op_hooks
+    call = {"op": "python_execution", "args": [], "result": {}}
+    before.fn(call)
+    path.write_text("value = (\n")
+    after.fn(call)
+    assert path.read_text() == "value = (\n"
     assert extension.ctx() == {}
-
-
-def test_registered_hook_repairs_patch_before_any_write(extension, tmp_path):
-    path = tmp_path / "example.py"
-    before, after = "value = [1]\n", "value = [1\n"
-    path.write_text(before)
-    decision = extension.op_hooks[0].fn(
-        {
-            "op": "patch",
-            "preview": {
-                "path": str(path),
-                "before": before,
-                "after": after,
-                "spans": [[1, 1]],
-            },
-        }
-    )
-    assert decision["marker"] == "repair"
-    assert decision["source"] == before
-    assert decision["notes"]
-    assert path.read_text() == before
 
 
 def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
     path = tmp_path / "example.py"
     path.write_text("value = [1]\n")
-    before, after = extension.op_hooks[1:]
+    before, after = extension.op_hooks
     call = {"op": "python_execution", "args": [{"code": "pass"}], "result": {}}
     before.fn(call)
     path.write_text("value = [2\n")
@@ -172,5 +137,5 @@ def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
 @pytest.mark.parametrize("source", ["print(42", "await function(", "await function()"])
 def test_registered_hook_leaves_block_repair_to_the_host(extension, source):
     call = {"op": "python_execution", "args": [{"code": source}], "result": {}}
-    assert extension.op_hooks[1].fn(call) is None
+    assert extension.op_hooks[0].fn(call) is None
     assert call["args"] == [{"code": source}]

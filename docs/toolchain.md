@@ -87,9 +87,6 @@ They use `ast.parse` and compile the syntax tree without executing it.
 They do not start a project interpreter, write bytecode files or change REPL globals.
 Project lint and tests still use your project's tools and interpreter.
 
-- Before a patch writes, the guard tries to repair invalid source within the changed lines.
-  The host writes the validated result once and reports the corrections.
-  If repair fails, a patch that breaks a parseable file writes nothing.
 - Vis repairs a Python block itself before the block executes. This extension does not change blocks.
   Before each block, the guard records the state of the Python files for the check after the block.
 - After a Python block, the guard can repair changed `.py` and `.pyi` files.

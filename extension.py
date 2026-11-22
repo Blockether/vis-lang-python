@@ -152,11 +152,7 @@ vis.register_extension(
             )
         ],
         prompt=PROMPT,
-        op_hooks=[
-            vis.OpHook(["patch"], GUARD.before_patch),
-            vis.OpHook(["python_execution"], GUARD.before_block),
-            vis.OpHook(["patch", "python_execution"], GUARD.after_edit, phase="after"),
-        ],
+        op_hooks=GUARD.op_hooks(),
         ctx=GUARD.ctx,
         grants=GRANTS,
     )
