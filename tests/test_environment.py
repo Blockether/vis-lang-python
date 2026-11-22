@@ -42,9 +42,10 @@ class Installer:
     def environment(self, name=".venv"):
         python = self.root / name / "bin" / "python"
         python.parent.mkdir(parents=True, exist_ok=True)
+        base_python = Path(getattr(sys, "_base_executable", sys.executable))
         if not python.exists():
-            python.symlink_to(sys.executable)
-        (self.root / name / "pyvenv.cfg").write_text("home = /usr\n")
+            python.symlink_to(base_python)
+        (self.root / name / "pyvenv.cfg").write_text(f"home = {base_python.parent}\n")
         return python
 
     def install(self, python: Path, name="dep-1.0"):
