@@ -88,7 +88,7 @@ def test_registered_hooks_report_python_writes_until_repaired(extension, tmp_pat
     path = tmp_path / "example.pyi"
     path.write_text("value: int\n")
     before, after = extension.op_hooks
-    call = {"op": "python_execution", "args": [], "result": {}}
+    call = {"op": "py3", "args": [], "result": {}}
     before.fn(call)
     path.write_text("return 1\n")
     after.fn(call)
@@ -112,7 +112,7 @@ def test_parser_failures_reach_the_guard_without_a_false_verdict(
     with pytest.raises(RuntimeError):
         tools._check_syntax({str(path): "value = (\n"}, tmp_path)
     before, after = extension.op_hooks
-    call = {"op": "python_execution", "args": [], "result": {}}
+    call = {"op": "py3", "args": [], "result": {}}
     before.fn(call)
     path.write_text("value = (\n")
     after.fn(call)
@@ -124,7 +124,7 @@ def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
     path = tmp_path / "example.py"
     path.write_text("value = [1]\n")
     before, after = extension.op_hooks
-    call = {"op": "python_execution", "args": [{"code": "pass"}], "result": {}}
+    call = {"op": "py3", "args": [{"code": "pass"}], "result": {}}
     before.fn(call)
     path.write_text("value = [2\n")
     after.fn(call)
@@ -136,6 +136,6 @@ def test_registered_hook_repairs_written_file_after_block(extension, tmp_path):
 
 @pytest.mark.parametrize("source", ["print(42", "await function(", "await function()"])
 def test_registered_hook_leaves_block_repair_to_the_host(extension, source):
-    call = {"op": "python_execution", "args": [{"code": source}], "result": {}}
+    call = {"op": "py3", "args": [{"code": source}], "result": {}}
     assert extension.op_hooks[0].fn(call) is None
     assert call["args"] == [{"code": source}]
