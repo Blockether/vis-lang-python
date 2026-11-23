@@ -7,7 +7,6 @@ from Vis.
 
 from __future__ import annotations
 
-import ast
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -66,8 +65,8 @@ def _check_syntax(sources, root):
     diagnostics = []
     for path, text in sorted(sources.items()):
         try:
-            tree = ast.parse(text, filename=str(path))
-            compile(tree, str(path), "exec", dont_inherit=True)
+            # Straight from source: one pass, without a Python syntax tree.
+            compile(text, str(path), "exec", dont_inherit=True)
         except SyntaxError as error:
             diagnostics.append(
                 Diagnostic(

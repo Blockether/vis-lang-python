@@ -106,7 +106,7 @@ def test_parser_failures_reach_the_guard_without_a_false_verdict(
     def unavailable(*args, **kwargs):
         raise RuntimeError("Parser is unavailable")
 
-    monkeypatch.setattr(tools.ast, "parse", unavailable)
+    monkeypatch.setattr(tools, "compile", unavailable, raising=False)
     path = tmp_path / "example.py"
     path.write_text("pass\n")
     with pytest.raises(RuntimeError):
