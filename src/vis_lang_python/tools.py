@@ -29,7 +29,7 @@ from vis_lang_interface import (
     string_list,
 )
 
-from vis_lang_python import environment, pytest_tool, repl, ruff_tool
+from vis_lang_python import environment, pytest_tool, repl, ruff_tool, syntax
 from vis_lang_python.repair import repair_source
 
 MARKERS = (
@@ -42,6 +42,8 @@ MARKERS = (
 )
 
 SYNTAX_SUFFIXES = (".py", ".pyi")
+# The edit check keeps the last sources of each file to compile only their changes.
+_CHECKS = syntax.Checks(64_000_000)
 
 
 def _absolute(path, workspace_root=Path.cwd):
@@ -64,15 +66,10 @@ def _check_syntax(sources, root):
     """
     diagnostics = []
     for path, text in sorted(sources.items()):
-        try:
-            # Straight from source: one pass, without a Python syntax tree.
-            compile(text, str(path), "exec", dont_inherit=True)
-        except SyntaxError as error:
-            diagnostics.append(
-                Diagnostic(
-                    str(path), error.lineno or 0, error.offset or 0, "error", error.msg
-                )
-            )
+        found = _CHECKS.check((str(root), str(path)), text, str(path))
+        if found.error is not None:
+            line, offset, message = found.error
+            diagnostics.append(Diagnostic(str(path), line, offset, "error", message))
     return SyntaxResult.of("python", diagnostics, files=len(sources))
 
 

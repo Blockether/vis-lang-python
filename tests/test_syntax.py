@@ -7,7 +7,7 @@ import blockether.vis.extension as vis
 import pytest
 from vis_lang_interface import process
 
-from vis_lang_python import tools
+from vis_lang_python import syntax, tools
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def test_parser_failures_reach_the_guard_without_a_false_verdict(
     def unavailable(*args, **kwargs):
         raise RuntimeError("Parser is unavailable")
 
-    monkeypatch.setattr(tools, "compile", unavailable, raising=False)
+    monkeypatch.setattr(syntax, "compile", unavailable, raising=False)
     path = tmp_path / "example.py"
     path.write_text("pass\n")
     with pytest.raises(RuntimeError):
@@ -139,3 +139,63 @@ def test_registered_hook_leaves_block_repair_to_the_host(extension, source):
     call = {"op": "py3", "args": [{"code": source}], "result": {}}
     assert extension.op_hooks[0].fn(call) is None
     assert call["args"] == [{"code": source}]
+
+
+BASE = """from __future__ import annotations
+
+import os
+
+
+def first(value):
+    if value:
+        return 1
+    return 2
+
+
+@decorator
+def second():
+    pass
+
+
+class Box:
+    size = 1
+
+    def first(self):
+        return 1
+
+    def second(self):
+        return 2
+
+
+x = 1 != 2
+y = 2
+"""
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("    return 2\n", "    return 2\n    return 3\n"),
+        ("    pass\n", "    pass\nelse:\n    pass\n"),
+        ("y = 2\n", "y = 2\nglobal x\n"),
+        ("y = 2\n", "y = 2\nfrom __future__ import division\n"),
+        ("import os\n", "from __future__ import barry_as_FLUFL\nimport os\n"),
+        ("import os\n\n\n", "import os "),
+        ("import os\n", "import os\nimport sys\n"),
+        ("    pass\n", "    return (\n"),
+        ("@decorator\n", ""),
+        (
+            "        return 2\n",
+            "        return 2\n\n    def third(self):\n        return 3\n",
+        ),
+        ("    def second(self):", "    def second(self, __a, _Box__a):"),
+        ("    def second(self):", "y = 3\n\n    def second(self):"),
+        ("    def second(self):", "  def second(self):"),
+        ("        return 2\n", "        return 2\n\n    global size\n"),
+    ],
+)
+def test_a_check_after_an_edit_gives_the_verdict_of_a_full_compile(old, new):
+    text = BASE.replace(old, new)
+    found = syntax.check(text, "example.py", syntax.check(BASE, "example.py"))
+    assert found.error == syntax.check(text, "example.py").error
+    assert syntax.check(BASE, "example.py", found).error is None
