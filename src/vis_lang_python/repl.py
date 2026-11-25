@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 from vis_lang_interface import RuntimeGone, process, runtime
-from vis_lang_interface.process import shell_call
+from vis_lang_interface.process import attach_shell
 
 from vis_lang_python import environment
 from vis_lang_python.environment import is_uv_marked as _is_uv_project
@@ -704,33 +704,30 @@ def _kept(cwd: str) -> _Repl | None:
     """
     sid = shell_id(cwd)
     try:
-        shell = shell_call()({"op": "logs", "id": sid, "offset": -1})
+        shell = attach_shell(sid)
     except Exception:
         return None
-    if str(shell.get("status")) != "running":
+    if str(shell.status) != "running":
         return None
-    command = str(shell.get("command") or "")
+    command = str(shell.command or "")
     placed, inputs = _kept_start(command)
     candidates = [placed] if placed else _kept_commands(cwd)
-    cmd = next((c for c in candidates if shlex.join(c) in command), None)
-    if cmd is None:
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    cmd = next((c for c in candidates if words[: len(c) + 1] == ["exec", *c]), None)
+    if cmd is None or os.path.realpath(cwd) != os.path.realpath(shell.cwd):
         return None
     place = _kept_directory(command)
     if not place or not os.path.isfile(os.path.join(place, "driver.py")):
-        # Nothing can reach an interpreter whose rendezvous is gone. An attach
-        # here would start a new child without its driver (Blockether/vis#389).
-        # The next start replaces the lost interpreter.
         return None
     try:
-        live = runtime.start(cmd, cwd=cwd, shell_id=sid)
-    except Exception:
+        meeting = runtime.Rendezvous(path=place).open()
+    except OSError:
         return None
-    if live.pid != shell.get("pid"):
-        # The kept rendezvous was gone, so a new interpreter started without
-        # its driver. That one is not the user's REPL.
-        live.stop()
-        return None
-    kept = _Repl(live, cwd, cmd, _kept_fingerprint(shell.get("command")), place, inputs)
+    live = runtime.Runtime(shell, meeting, cmd, cwd, kept=True)
+    kept = _Repl(live, cwd, cmd, _kept_fingerprint(command), place, inputs)
     # An earlier process may have left code running in it.
     kept.stuck = True
     return kept
