@@ -47,12 +47,16 @@ When a broken `.venv` stops pytest or the REPL, the error names both fixes.
   installer. A changed file, a deleted environment or a package that you install or remove by hand
   makes the next start install again.
 - An installation can take 900 seconds. The result's `detail` says what the start did.
-- When the installation fails, the `detail` has the installer's command and last output. The REPL
+- When the installation fails, the `detail` has the cause, at most three lines of the installer
+  and the path of a log with its full output. The REPL
   then runs on the environment that exists. With no environment, the start fails with that report,
   and the `.venv` and the `uv.lock` that the failed installer made are removed. What existed before
   the start stays.
 - A `.venv` that is a virtualenv without an interpreter cannot run. uv makes it again, and the
   `detail` says so. A `.venv` directory that is no virtualenv is never cleared.
+- With `python.dependency_sync: never` in `vis.yml`, no tool installs or changes packages. The
+  REPL and the tests use the interpreter that exists: Vis shared Python, a local virtualenv or the
+  system Python. `py.repl_start(upgrade=True)` is then refused.
 - A live REPL gets no installation. When the dependency files changed after its start, the result
   says to stop and start it.
 - `py.repl_start(upgrade=True)` installs the newest versions that the files allow, at that one

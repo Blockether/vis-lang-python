@@ -27,6 +27,7 @@ class Installer:
         self.root = root
         self.commands: list[tuple[str, ...]] = []
         self.exit_code = 0
+        self.out = ""
         self.err = ""
         self.raises = None
         self.fails = ""
@@ -59,7 +60,7 @@ class Installer:
         self.commands.append(tuple(command))
         if self.raises:
             raise self.raises
-        out = ""
+        out = self.out
         exit_code = 1 if self.fails and self.fails in command else self.exit_code
         # The index has a newer version than a start without `--upgrade` keeps.
         dep = "dep-2.0" if "--upgrade" in command else "dep-1.0"
@@ -255,9 +256,92 @@ def test_a_failed_installation_without_an_environment_fails_the_start(tmp_path, 
     text = str(raised.value)
     assert "the project has no environment to run in" in text
     assert "the installer exited with status 2" in text
-    assert f"Installer command: uv run python -c {environment.PRINT_EXECUTABLE}" in text
     assert "error: Failed to fetch: `http://127.0.0.1:9/simple/six/`" in text
     assert PythonTools().repl_status(cwd=str(tmp_path)).is_running is False
+
+
+@pytest.mark.parametrize("has_environment", [False, True])
+def test_installer_failure_reports_a_short_detail_and_saves_all_output(
+    tmp_path, uv, has_environment
+):
+    (tmp_path / "requirements.txt").write_text("six\n")
+    if has_environment:
+        uv.environment()
+    uv.exit_code = 2
+    uv.out = "first installer line\n" + "stdout " * 150 + "\n"
+    uv.err = "error: no matching package\n" + "build log " * 150 + "\nlast diagnostic\n"
+    tools = PythonTools()
+    cwd = str(tmp_path)
+    if has_environment:
+        try:
+            text = tools.repl_start(cwd=cwd).detail
+        finally:
+            tools.repl_stop(cwd=cwd)
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            tools.repl_start(cwd=cwd)
+        text = str(raised.value)
+    assert len(text) <= 600
+    assert "status 2" in text and " s:" in text
+    assert "error: no matching package" in text and "last diagnostic" in text
+    log = next(line for line in text.splitlines() if line.startswith("Installer log: "))
+    assert Path(log.removeprefix("Installer log: ")).read_text() == uv.out + uv.err
+
+
+@pytest.mark.parametrize(
+    ("manifest", "contents"),
+    [("requirements.txt", "six\n"), ("pyproject.toml", PROJECT + "[tool.uv]\n")],
+)
+def test_never_uses_the_existing_python_without_an_installer(
+    tmp_path, uv, monkeypatch, manifest, contents
+):
+    (tmp_path / manifest).write_text(contents)
+    python = str(uv.environment())
+    monkeypatch.setattr(
+        repl.shutil, "which", lambda name: name if name == "uv" else None
+    )
+    tools = PythonTools(dependency_sync=lambda: "never")
+    cwd = str(tmp_path)
+    try:
+        started = tools.repl_start(cwd=cwd)
+        assert started.is_running and started.detail == "started"
+        assert started.command[0] == python
+        assert tools.repl_eval("1 + 1", cwd=cwd).value == "2"
+    finally:
+        tools.repl_stop(cwd=cwd)
+
+    commands = []
+
+    def run(command, **options):
+        commands.append(command)
+        if "coverage" in command:
+            return process.ToolRun(tuple(command), 1, "", "No module named coverage", 1)
+        report = next(
+            arg.removeprefix("--junit-xml=")
+            for arg in command
+            if arg.startswith("--junit-xml=")
+        )
+        Path(report).write_text(
+            '<testsuite tests="1"><testcase name="test_passes"/></testsuite>'
+        )
+        return process.ToolRun(tuple(command), 0, "", "", 1)
+
+    monkeypatch.setattr(process, "run", run)
+    assert tools.run_tests(cwd=cwd, coverage=True).passed == 1
+    assert [command[:3] for command in commands] == [
+        [python, "-m", "coverage"],
+        [python, "-m", "pytest"],
+    ]
+    assert uv.commands == []
+
+
+def test_never_rejects_upgrade_before_starting_the_repl(tmp_path, uv):
+    (tmp_path / "requirements.txt").write_text("six\n")
+    tools = PythonTools(dependency_sync=lambda: "never")
+    with pytest.raises(ValueError, match="python.dependency_sync.*never"):
+        tools.repl_start(cwd=str(tmp_path), upgrade=True)
+    assert uv.commands == []
+    assert not tools.repl_status(cwd=str(tmp_path)).is_running
 
 
 def test_the_empty_environment_of_a_failed_installer_is_no_environment(

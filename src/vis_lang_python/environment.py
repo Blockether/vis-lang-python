@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -38,8 +39,8 @@ SYNC_TIMEOUT_S = 900
 """Seconds one installation can take. Downloads and builds need far longer than
 the interpreter's own startup."""
 
-OUTPUT_TAIL_LINES = 40
-"""How many of the installer's last output lines a failed installation keeps."""
+FAILURE_LIMIT = 490
+"""Maximum size of the installer summary, before the REPL adds its own text."""
 
 STAMP_VERSION = 1
 HASHED_BYTES = 4 * 1024 * 1024
@@ -90,6 +91,7 @@ class Sync:
     """What the installer did besides the installation, for the person."""
     changes: tuple[str, ...] = ()
     """The packages whose version an upgrade changed, as `name old -> new`."""
+    log: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -99,12 +101,13 @@ class Environment:
     `python` is the argv prefix that launches the interpreter. It is empty when
     the caller chooses the interpreter itself, and when a failed installation
     left no environment to run. `inputs` is the digest of the dependency files
-    that this environment holds, empty when the installation failed.
+    that this environment holds, empty when the installation failed, and None
+    when dependency sync is disabled.
     """
 
     python: tuple[str, ...]
     sync: Sync
-    inputs: str = ""
+    inputs: str | None = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -427,9 +430,32 @@ def _run(command, root: Path, env, timeout_s) -> process.ToolRun:
     return process.run(list(command), cwd=str(root), timeout_s=timeout_s, env=env)
 
 
-def _tail(done: process.ToolRun) -> tuple[str, ...]:
-    said = [line for line in f"{done.out}\n{done.err}".splitlines() if line.strip()]
-    return tuple(said[-OUTPUT_TAIL_LINES:])
+def _diagnostics(done: process.ToolRun) -> tuple[str, ...]:
+    """Keep a cause and the last diagnostic lines for the summary."""
+    lines = [
+        line.strip() for line in f"{done.out}\n{done.err}".splitlines() if line.strip()
+    ]
+    tail = lines[-2:]
+    cause = next(
+        (line for line in lines if line.lower().startswith(("error:", "failed"))), ""
+    )
+    return tuple(dict.fromkeys(([cause] if cause else []) + tail[::-1]))
+
+
+def _save_failure_log(output: list[str]) -> str:
+    """Keep the captured installer streams in the session's temporary directory."""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="python-install-",
+            suffix=".log",
+            delete=False,
+        ) as log:
+            log.writelines(output)
+            return log.name
+    except OSError:
+        return ""
 
 
 def _steps(
@@ -577,6 +603,7 @@ def prepare(
     is_remade = makes_venv and os.path.lexists(root / ".venv")
     started = time.monotonic()
     failure: Sync | None = None
+    output: list[str] = []
     for command in steps:
         try:
             done = _run(command, root, env, timeout_s)
@@ -598,6 +625,7 @@ def prepare(
                 "failed", plan.tool, command, time.monotonic() - started, reason=str(ex)
             )
             break
+        output.extend((done.out, done.err))
         if not done.is_ok:
             failure = Sync(
                 "failed",
@@ -605,7 +633,7 @@ def prepare(
                 command,
                 time.monotonic() - started,
                 done.exit_code,
-                _tail(done),
+                _diagnostics(done),
             )
             break
         if not python:
@@ -618,12 +646,15 @@ def prepare(
                     command,
                     time.monotonic() - started,
                     done.exit_code,
-                    _tail(done),
+                    _diagnostics(done),
                     "the installer named no interpreter",
                 )
                 break
         finished += 1
     if failure is not None:
+        if not any(output) and failure.reason:
+            output.append(failure.reason + "\n")
+        failure = dataclasses.replace(failure, log=_save_failure_log(output))
         if makes_venv and finished:
             # `uv venv --clear` made this `.venv`, also where a broken one was.
             leftovers.append(root / ".venv")
@@ -725,20 +756,26 @@ def describe(sync: Sync | None, *, is_running: bool = True) -> str:
 
 
 def failure_lines(sync: Sync, *, is_running: bool) -> list[str]:
-    """A failed installation for the model: what failed, the command and the
-    installer's last output."""
-    why = sync.reason or f"the installer exited with status {sync.exit_code}"
-    lines = [f"dependency installation FAILED after {sync.seconds:.1f} s: {why}."]
+    """Show the failure and a few diagnostics; keep full output out of the result."""
+    log = f"Installer log: {sync.log}" if sync.log else "Installer log unavailable."
+    why = (
+        f"the installer exited with status {sync.exit_code}"
+        if sync.exit_code is not None
+        else ""
+    )
+    reason = _short(sync.reason.splitlines()[0], 110) if sync.reason else ""
+    summary = "; ".join(filter(None, (why, reason)))
+    lines = [f"dependency installation FAILED after {sync.seconds:.1f} s: {summary}."]
     if is_running:
-        lines.append(
-            "The REPL runs on the environment that exists. Its packages can differ"
-            " from the project's files. Fix the cause, call py.repl_stop(), then"
-            " py.repl_start()."
-        )
-    if sync.note:
-        lines.append(f"Before that, {sync.note}. It is removed now.")
-    lines.append(f"Installer command: {' '.join(sync.command)}")
-    if sync.output:
-        lines.append("Last output of the installer:")
-        lines.extend(sync.output)
+        lines.append("The REPL uses the existing environment.")
+    lines.append(log)
+    for diagnostic in sync.output:
+        room = min(110, FAILURE_LIMIT - sum(len(line) + 1 for line in lines))
+        if room < 20:
+            break
+        lines.append(_short(diagnostic, room))
     return lines
+
+
+def _short(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."

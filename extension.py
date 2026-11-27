@@ -91,20 +91,11 @@ PROMPT = prompt.routing(
         "repl_stop",
     ),
     notes=(
-        "`py.repl_start` first installs the project's dependencies: `pyproject.toml` with the uv"
-        " that Vis ships, else `requirements.txt` into `.venv`. So the REPL sees the project's"
-        " packages; the sandbox block does not. Unchanged files install nothing."
-        " `py.repl_start(upgrade=True)` installs the newest versions that the files allow, at"
-        " that one start; stop a live REPL first. `python -m pip install` works in the REPL."
-        " Read the result's"
-        " `detail`: it says what was installed, and it carries the installer's output when the"
-        " installation failed. When vis.yml sets `python.environment: shared`, the packages go to"
-        " Vis shared packages and the REPL runs `vis-agent python --shared`, never the project's"
-        " `.venv`. `py.repl_eval` needs that interpreter started first.",
-        "`py.run_tests` runs pytest with the same interpreter and needs no REPL. `py.format_code`"
-        " and `py.lint_code` run ruff.",
-        "`py.run_tests(coverage=True)` runs pytest under the project's coverage.py. Its result's"
-        " `coverage` lists each file's gaps: the lines and branches that never ran.",
+        "`py.repl_start` first installs the project's dependencies, so the REPL sees the"
+        " project's packages; the sandbox block does not. Its `detail` reports a failed"
+        " installation. `py.repl_eval` needs the REPL started first.",
+        "`py.run_tests` runs pytest with the same interpreter and needs no REPL;"
+        " `coverage=True` adds each file's gaps. `py.format_code` and `py.lint_code` run ruff.",
     ),
     tools=PythonTools,
 )
@@ -140,13 +131,14 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-python",
         description="Python tools: ruff formatting and lint, pytest runs and a managed project REPL.",
-        version="1.18.10",
+        version="1.19.0",
         alias="py",
         symbols=[
             vis.Symbol(
                 PythonTools(
                     workspace_root=vis.workspace_root,
                     python_environment=vis.python_environment,
+                    dependency_sync=getattr(vis, "python_dependency_sync", None),
                 ),
                 name="py",
             )

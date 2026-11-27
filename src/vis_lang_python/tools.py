@@ -182,19 +182,27 @@ class PythonTools:
     """Format, lint and test Python, and evaluate in a project REPL."""
 
     def __init__(
-        self, *, workspace_root=Path.cwd, python_environment=lambda: "project"
+        self,
+        *,
+        workspace_root=Path.cwd,
+        python_environment=lambda: "project",
+        dependency_sync=None,
     ):
         """Keep live providers. Hosted tools receive the SDK functions.
 
         `python_environment` answers `project` or `shared`, the project's
         `python.environment`. With `shared`, tests and the REPL run with
-        `vis-agent python --shared`.
+        `vis-agent python --shared`. `dependency_sync` answers `auto` or `never`.
         """
         self._workspace_root = workspace_root
         self._python_environment = python_environment
+        self._dependency_sync = dependency_sync
 
     def _shared(self):
         return self._python_environment() == "shared"
+
+    def _can_sync(self):
+        return self._dependency_sync is None or self._dependency_sync() != "never"
 
     def _absolute(self, path):
         return _absolute(path, self._workspace_root)
@@ -300,6 +308,7 @@ class PythonTools:
             timeout_s=timeout_s,
             shared=self._shared(),
             coverage=coverage,
+            can_sync=self._can_sync(),
         )
 
     def repl_start(
@@ -323,8 +332,10 @@ class PythonTools:
         in the REPL; in a shared REPL, Vis points that pip at its shared packages.
         The detail says what was done, and for an upgrade it names the changed
         packages.
-        A failed installation is reported there with the installer's output, and the
-        REPL then runs on the environment that exists. Without dependency files the
+        A failed installation is reported there with a path to the installer log.
+        The REPL then runs on the environment that exists. With
+        `python.dependency_sync: never`, the REPL uses the existing interpreter
+        without an installer and refuses `upgrade=True`. Without dependency files the
         interpreter is Poetry, a local virtualenv or python3, in that order. A live
         REPL is never replaced, because its globals are the work: with
         upgrade=True it is refused, so stop it first. The interpreter
@@ -337,6 +348,7 @@ class PythonTools:
             "cwd": str(self._absolute(cwd)),
             "shared": self._shared(),
             "upgrade": upgrade,
+            "can_sync": self._can_sync(),
         }
         env = call_env()
         if env:

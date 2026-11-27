@@ -47,6 +47,7 @@ def run(
     timeout_s=900,
     shared=False,
     coverage=False,
+    can_sync=True,
 ):
     """Run pytest in `root` and read its JUnit report.
 
@@ -59,6 +60,7 @@ def run(
         shared: Run with `vis-agent python --shared`, not the project environment.
         coverage: Run under coverage.py with branches, and write `coverage.json`
             in `root`.
+        can_sync: Let a launcher prepare the project environment on demand.
 
     Returns:
         A `TestResult` with one entry per failing test, and its coverage when
@@ -74,7 +76,7 @@ def run(
         raise ValueError("max_failures must be 0 or more")
     with tempfile.TemporaryDirectory() as workspace:
         report = Path(workspace) / "report.xml"
-        python = detect_command(str(root), shared=shared)
+        python = detect_command(str(root), shared=shared, can_sync=can_sync)
         runner = ["-m", "coverage", "run", "--branch"] if coverage else []
         command = [
             *python,
@@ -113,6 +115,7 @@ def run(
                     max_failures=max_failures,
                     timeout_s=timeout_s,
                     shared=shared,
+                    can_sync=can_sync,
                 )
                 why = f"coverage.py is not installed. {COVERAGE_HINT}"
                 return dataclasses.replace(result, output=_noted(result.output, why))

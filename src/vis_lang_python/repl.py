@@ -346,7 +346,9 @@ BROKEN_ENVIRONMENT = (
 )
 
 
-def detect_command(cwd: str, *, shared: bool = False) -> list[str]:
+def detect_command(
+    cwd: str, *, shared: bool = False, can_sync: bool = True
+) -> list[str]:
     """The argv PREFIX that launches a project-aware Python in `cwd`.
 
     With `shared`, the project's `python.environment` is `shared`: the prefix is
@@ -354,17 +356,19 @@ def detect_command(cwd: str, *, shared: bool = False) -> list[str]:
     Vis shared packages and never reads `.venv`. Otherwise the first match wins, in this order: uv, Poetry, a
     project virtualenv, then the system interpreter. uv needs `uv.lock` or
     `[tool.uv]`, plus `uv` on PATH. Poetry needs `poetry.lock`, plus `poetry` on
-    PATH."""
+    PATH. With `can_sync=False`, skip launchers that can create or change the
+    project environment."""
     if shared:
         found = process.vis_python()
         if not found.is_available:
             raise RuntimeError(SHARED_MISSING)
         return found.python(shared=True)
     root = Path(cwd)
-    if _is_uv_project(root) and shutil.which("uv"):
-        return ["uv", "run", "python"]
-    if (root / "poetry.lock").is_file() and shutil.which("poetry"):
-        return ["poetry", "run", "python"]
+    if can_sync:
+        if _is_uv_project(root) and shutil.which("uv"):
+            return ["uv", "run", "python"]
+        if (root / "poetry.lock").is_file() and shutil.which("poetry"):
+            return ["poetry", "run", "python"]
     venv = _venv_python(root)
     if venv:
         return [venv]
@@ -802,12 +806,19 @@ def start(options=None) -> dict:
 def _start(options: dict, cwd: str) -> dict:
     repl_id = _repl_id(options, cwd)
     shared = bool(options.get("shared"))
+    can_sync = options.get("can_sync", True)
+    if not can_sync and options.get("upgrade"):
+        raise ValueError(
+            "upgrade=True is not allowed when python.dependency_sync is never"
+        )
     live = _live(cwd)
     if live:
         answer = _status(cwd, live)
         answer["id"] = repl_id
-        if live.inputs is not None and live.inputs != environment.inputs(
-            cwd, shared=shared
+        if (
+            can_sync
+            and live.inputs is not None
+            and live.inputs != environment.inputs(cwd, shared=shared)
         ):
             answer["stale"] = True
         # A REPL IS its environment: reusing one started with other variables would
@@ -838,10 +849,16 @@ def _start(options: dict, cwd: str) -> dict:
         return answer
 
     child = _child_environment(options.get("env"))
-    ready = environment.prepare(
-        cwd, shared=shared, upgrade=bool(options.get("upgrade")), env=child
+    ready = (
+        environment.prepare(
+            cwd, shared=shared, upgrade=bool(options.get("upgrade")), env=child
+        )
+        if can_sync
+        else environment.Environment((), environment.Sync("none"), inputs=None)
     )
-    python = tuple(ready.python or detect_command(cwd, shared=shared))
+    python = tuple(
+        ready.python or detect_command(cwd, shared=shared, can_sync=can_sync)
+    )
     # The interpreter of an environment runs without `uv run` around it, so the
     # environment's programs get on PATH here.
     child = {**child, **environment.activation(python, child.get("PATH"))}
