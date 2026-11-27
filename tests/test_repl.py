@@ -9,7 +9,7 @@ import types
 
 import blockether.vis.extension as vis
 import pytest
-from vis_lang_interface.process import shell_call
+from vis_lang_interface.process import attach_shell
 
 from vis_lang_python import environment, repl
 from vis_lang_python.tools import PythonTools
@@ -345,7 +345,7 @@ def test_a_kept_repl_without_its_rendezvous_is_replaced(project, monkeypatch):
     tools, cwd = project
     first = repl.start({"cwd": cwd})
     repl.detach_all()
-    kept = shell_call()({"op": "logs", "id": repl.shell_id(cwd), "offset": -1})
+    kept = attach_shell(repl.shell_id(cwd))
     held = next(w for w in shlex.split(kept["command"]) if w.startswith("3<>"))
     shutil.rmtree(os.path.dirname(held[3:]))
     meetings = []
