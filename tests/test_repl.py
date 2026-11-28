@@ -387,6 +387,18 @@ def test_a_shared_environment_without_vis_agent_names_the_fix(tmp_path, monkeypa
         repl.detect_command(str(tmp_path), shared=True)
 
 
+# A container without Python made every REPL start fail with "command not found",
+# while the Vis in it has a Python.
+def test_a_machine_without_python_runs_the_python_of_vis(tmp_path, monkeypatch):
+    launcher = ("/opt/vis/vis-agent",)
+    named = types.SimpleNamespace(launcher=launcher, shared_packages=tmp_path)
+    monkeypatch.setattr(vis, "python_runtime", lambda: named, raising=False)
+    monkeypatch.setattr(repl.shutil, "which", lambda name: None)
+    assert repl.detect_command(str(tmp_path)) == [*launcher, "python", "--shared"]
+    monkeypatch.setattr(repl.shutil, "which", lambda name: f"/bin/{name}")
+    assert repl.detect_command(str(tmp_path)) == ["python3"]
+
+
 # Regression, Blockether/vis#479: Vis is not always `vis-agent` on PATH. It can
 # be a native binary in a container or a JVM. The host names its launcher.
 def test_the_launcher_that_vis_names_is_used_off_path(tmp_path, monkeypatch):

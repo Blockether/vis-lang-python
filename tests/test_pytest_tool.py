@@ -1,5 +1,7 @@
 """Counts and failures are read from the report pytest writes, not its output."""
 
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -132,6 +134,45 @@ def test_nested_classes_name_a_failure_and_a_missing_line_stays_unknown():
         0,
     )
     assert failure.message == "failed on setup with fixture 'db' not found"
+
+
+# A sealed benchmark task: its Python 3.12 had the packages of the product and no
+# pytest, and the shared Python of Vis had pytest and not those packages. Tests ran
+# with the shared one and failed on `import confluent_kafka`.
+def test_a_sealed_project_without_pytest_borrows_it_and_keeps_its_packages(
+    tmp_path, monkeypatch
+):
+    system = shutil.which("python3")
+    supported = "import sys; sys.exit(sys.version_info < (3, 10))"
+    if not system or subprocess.run([system, "-c", supported]).returncode:
+        pytest.skip("no system python3 that this pytest supports")
+    home = tmp_path / ".venv"
+    subprocess.run([system, "-m", "venv", "--without-pip", str(home)], check=True)
+    site = next((home / "lib").glob("python*/site-packages"))
+    (site / "only_in_project.py").write_text("VALUE = 7\n")
+    lender = Path(pytest.__file__).parent.parent
+    other = next(
+        entry.name
+        for entry in sorted(lender.iterdir())
+        if (entry / "__init__.py").is_file()
+        and entry.name not in pytest_tool.RUNNER_PACKAGES
+    )
+    monkeypatch.setattr(
+        pytest_tool.process,
+        "vis_python",
+        lambda: SimpleNamespace(shared_packages=lender),
+    )
+    (tmp_path / "test_it.py").write_text(
+        "import importlib.util\n\nimport only_in_project\n\n\n"
+        "def test_the_project_package():\n    assert only_in_project.VALUE == 7\n\n\n"
+        "def test_no_other_package_of_vis():\n"
+        f"    assert importlib.util.find_spec({other!r}) is None\n"
+    )
+    with pytest.raises(pytest_tool.process.ToolMissing):
+        pytest_tool.run(root=str(tmp_path), timeout_s=120)
+    result = pytest_tool.run(root=str(tmp_path), timeout_s=120, can_sync=False)
+    assert (result.total, result.passed) == (2, 2)
+    assert pytest_tool.BORROWED_NOTE in result.output
 
 
 # Regression, Blockether/vis#379: vis.yml set `python.environment: shared`, but

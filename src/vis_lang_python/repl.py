@@ -354,7 +354,8 @@ def detect_command(
     With `shared`, the project's `python.environment` is `shared`: the prefix is
     `vis-agent python --shared` of the Vis that hosts this process. It imports
     Vis shared packages and never reads `.venv`. Otherwise the first match wins, in this order: uv, Poetry, a
-    project virtualenv, then the system interpreter. uv needs `uv.lock` or
+    project virtualenv, the system interpreter, then the Python of Vis on a
+    machine that has none. uv needs `uv.lock` or
     `[tool.uv]`, plus `uv` on PATH. Poetry needs `poetry.lock`, plus `poetry` on
     PATH. With `can_sync=False`, skip launchers that can create or change the
     project environment."""
@@ -372,7 +373,11 @@ def detect_command(
     venv = _venv_python(root)
     if venv:
         return [venv]
-    return ["python3" if shutil.which("python3") else "python"]
+    for name in ("python3", "python"):
+        if shutil.which(name):
+            return [name]
+    found = process.vis_python()
+    return found.python(shared=True) if found.is_available else ["python"]
 
 
 def environment_hint(output: str) -> str:

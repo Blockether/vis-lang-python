@@ -7,6 +7,10 @@ one. So the tests import the project's dependencies, not the dependencies of
 this extension. Counts and failures come from the JUnit XML that pytest
 writes, never from its terminal output.
 
+A project with `python.dependency_sync: never` cannot add pytest. When its
+interpreter has none, the run borrows pytest from the Vis shared packages: only
+pytest and the packages that it imports, after the interpreter's own packages.
+
 With coverage, pytest runs under the project's coverage.py with branch
 measurement. Its JSON report gives each file's covered lines and branches, and
 the gaps: the lines and the branches that never ran.
@@ -35,6 +39,24 @@ OUTPUT_TAIL = 4000
 INSTALL_HINT = "add pytest to the project, for example `uv add --dev pytest`."
 COVERAGE_HINT = "add coverage to the project, for example `uv add --dev coverage`."
 COVERAGE_REPORT = "coverage.json"
+RUNNER_PACKAGES = (
+    "pytest",
+    "_pytest",
+    "py",
+    "pluggy",
+    "iniconfig",
+    "packaging",
+    "pygments",
+    "exceptiongroup",
+    "tomli",
+)
+# The borrowed packages go last on the path, so the interpreter's own packages win.
+BORROWED = (
+    "import sys; sys.path.append(sys.argv.pop(1));"
+    " import pytest; sys.exit(pytest.main())"
+)
+BORROWED_NOTE = "pytest came from the Vis shared packages: this interpreter has none."
+BORROWED_COVERAGE = "a borrowed pytest runs without coverage.py."
 DETAIL_LIMIT = 100
 
 
@@ -78,11 +100,7 @@ def run(
         report = Path(workspace) / "report.xml"
         python = detect_command(str(root), shared=shared, can_sync=can_sync)
         runner = ["-m", "coverage", "run", "--branch"] if coverage else []
-        command = [
-            *python,
-            *runner,
-            "-m",
-            "pytest",
+        options = [
             *[str(path) for path in paths],
             "-q",
             "-p",
@@ -93,9 +111,9 @@ def run(
             f"--junit-xml={report}",
         ]
         if keyword:
-            command += ["-k", keyword]
+            options += ["-k", keyword]
         if max_failures:
-            command.append(f"--maxfail={max_failures}")
+            options.append(f"--maxfail={max_failures}")
         # The coverage data stays in the private directory; only the JSON report
         # goes to the project, where graphify reads it.
         env = (
@@ -103,9 +121,28 @@ def run(
         )
         # The JUnit report is written outside the project, so the run needs that directory.
         done = process.run(
-            command, cwd=root, timeout_s=timeout_s, env=env, read_write=(workspace,)
+            [*python, *runner, "-m", "pytest", *options],
+            cwd=root,
+            timeout_s=timeout_s,
+            env=env,
+            read_write=(workspace,),
         )
         output = (done.out + done.err)[-OUTPUT_TAIL:]
+        lent = Path(workspace) / "runner"
+        is_borrowed = (
+            not report.is_file()
+            and "No module named pytest" in output
+            and not (shared or can_sync)
+            and _lend_runner(lent)
+        )
+        if is_borrowed:
+            done = process.run(
+                [*python, "-c", BORROWED, str(lent), *options],
+                cwd=root,
+                timeout_s=timeout_s,
+                read_write=(workspace,),
+            )
+            output = (done.out + done.err)[-OUTPUT_TAIL:]
         if not report.is_file():
             if coverage and "No module named coverage" in output:
                 result = run(
@@ -127,6 +164,11 @@ def run(
                 + (f"\n{hint}" if hint else "")
             )
         result = result_of(report.read_text(encoding="utf-8"), output, done.duration_ms)
+        if is_borrowed:
+            noted = f"{result.output}\n\n{BORROWED_NOTE}".strip()
+            if coverage:
+                noted = _noted(noted, BORROWED_COVERAGE)
+            return dataclasses.replace(result, output=noted)
         if not coverage:
             return result
         target = Path(root) / COVERAGE_REPORT
@@ -144,6 +186,26 @@ def run(
         return dataclasses.replace(
             result, coverage=dataclasses.replace(measured, report=str(target))
         )
+
+
+def _lend_runner(target):
+    """Link the pytest of the Vis shared packages into `target`.
+
+    Only pytest and the packages that it imports are linked. So the tests import
+    the project's packages and no other package of Vis.
+
+    Returns:
+        Whether Vis has a pytest to lend.
+    """
+    packages = process.vis_python().shared_packages
+    if not (packages / "pytest" / "__init__.py").is_file():
+        return False
+    target.mkdir()
+    for name in RUNNER_PACKAGES:
+        for found in (packages / name, packages / f"{name}.py"):
+            if found.exists():
+                (target / found.name).symlink_to(found)
+    return True
 
 
 def _noted(output, why):

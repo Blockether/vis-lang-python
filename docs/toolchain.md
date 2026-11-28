@@ -15,7 +15,8 @@ py.run_tests(["tests"], coverage=True)
 ## Project tools and environments
 
 Which interpreter runs your tests and REPL is decided per project, first match winning: uv
-(`uv.lock` or `[tool.uv]`), Poetry (`poetry.lock`), a local `.venv`, then `python3`. Ruff is taken
+(`uv.lock` or `[tool.uv]`), Poetry (`poetry.lock`), a local `.venv`, then `python3`. A machine
+without Python gets the Python of Vis. Ruff is taken
 from the project's virtualenv, then `PATH`, then the copy installed with this extension.
 
 If the project's `vis.yml` sets `python: {environment: shared}`, tests and the REPL run with
@@ -56,7 +57,10 @@ When a broken `.venv` stops pytest or the REPL, the error names both fixes.
   `detail` says so. A `.venv` directory that is no virtualenv is never cleared.
 - With `python.dependency_sync: never` in `vis.yml`, no tool installs or changes packages. The
   REPL and the tests use the interpreter that exists: Vis shared Python, a local virtualenv or the
-  system Python. `py.repl_start(upgrade=True)` is then refused.
+  system Python. `py.repl_start(upgrade=True)` is then refused. When that interpreter has no
+  pytest, `py.run_tests` borrows pytest from Vis shared packages: only pytest and the packages that
+  it imports, after the interpreter's own packages. The output says so, and such a run measures no
+  coverage.
 - A live REPL gets no installation. When the dependency files changed after its start, the result
   says to stop and start it.
 - `py.repl_start(upgrade=True)` installs the newest versions that the files allow, at that one

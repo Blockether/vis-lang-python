@@ -1,6 +1,6 @@
 [project]
 name = "vis-lang-python"
-version = "1.19.1"
+version = "1.20.0"
 description = "Python tools for Vis: ruff formatting and lint, pytest runs and a managed project REPL."
 keywords = ["language-tools", "development"]
 requires-python = ">=3.12"

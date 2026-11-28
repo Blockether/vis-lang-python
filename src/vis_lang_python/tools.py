@@ -294,7 +294,9 @@ class PythonTools:
         result's coverage gives each file's covered lines and branches, and its
         gaps: the lines and branches that never ran. The run writes
         `coverage.json`, which `graphify crap` reads. Without coverage.py, the
-        tests still run and the output says why coverage is missing. Raises
+        tests still run and the output says why coverage is missing. With
+        `python.dependency_sync: never`, a project without pytest borrows the
+        pytest of the Vis shared packages, and the output says so. Raises
         ToolMissing when the project has no pytest and ToolTimeout when the run
         outlives timeout_s. The tests get the variables that a `before` op hook on
         `py.run_tests` adds with `vis.with_env`.
